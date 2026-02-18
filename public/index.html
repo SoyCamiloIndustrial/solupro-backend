@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Solupro Checkout</title>
+</head>
+<body>
+  <h1>Comprar Curso - Marca Personal</h1>
+
+  <div id="checkout"></div>
+
+  <script>
+    fetch("/api/signature")
+      .then(res => res.json())
+      .then(data => {
+        const script = document.createElement("script");
+
+        script.src = "https://checkout.wompi.co/widget.js";
+        script.setAttribute("data-render", "button");
+        script.setAttribute("data-public-key", "pub_prod_i80UNdXv69FRkesjzaKNMyUHvNnDb5Mu"); 
+        script.setAttribute("data-currency", data.currency);
+        script.setAttribute("data-amount-in-cents", data.amount);
+        script.setAttribute("data-reference", data.reference);
+        script.setAttribute("data-signature:integrity", data.signature);
+        script.setAttribute("data-redirect-url", "http://localhost:4000/success.html");
+
+        document.getElementById("checkout").appendChild(script);
+      })
+      .catch(error => {
+        console.error("Error cargando firma:", error);
+      });
+  </script>
+
+</body>
+</html>
