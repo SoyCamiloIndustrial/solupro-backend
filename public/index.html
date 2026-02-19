@@ -2,32 +2,64 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>SoluPro - Pago</title>
+  <title>Comprar Curso - $2.000 COP</title>
+
+  <!-- Widget oficial de Wompi -->
   <script src="https://checkout.wompi.co/widget.js"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 40px;
+    }
+
+    button {
+      background: #2e86de;
+      color: white;
+      padding: 15px 25px;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+      border-radius: 6px;
+    }
+
+    button:hover {
+      background: #1b4f72;
+    }
+  </style>
 </head>
 <body>
 
-<h1>Comprar Curso - $2.000 COP</h1>
-<button id="payBtn">Pagar con Wompi</button>
+  <h1>Comprar Curso - $2.000 COP</h1>
 
-<script>
-  document.getElementById("payBtn").addEventListener("click", async () => {
+  <button id="payBtn">Pagar con Wompi</button>
 
-    const response = await fetch("/api/signature");
-    const data = await response.json();
+  <script>
+    document.getElementById("payBtn").addEventListener("click", async () => {
 
-    const checkout = new WidgetCheckout({
-      currency: data.currency,
-      amountInCents: data.amountInCents,
-      reference: data.reference,
-      publicKey: data.publicKey,
-      signature: { integrity: data.signature },
-      redirectUrl: window.location.origin
+      try {
+        const response = await fetch("/api/signature");
+        const data = await response.json();
+
+        const checkout = new WidgetCheckout({
+          currency: data.currency,
+          amountInCents: data.amountInCents,
+          reference: data.reference,
+          publicKey: data.publicKey,
+          signature: {
+            integrity: data.signature
+          },
+          redirectUrl: window.location.origin
+        });
+
+        checkout.open();
+
+      } catch (error) {
+        console.error("Error abriendo widget:", error);
+        alert("Error cargando pago");
+      }
     });
-
-    checkout.open();
-  });
-</script>
+  </script>
 
 </body>
 </html>
