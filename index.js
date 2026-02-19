@@ -1,35 +1,35 @@
 require("dotenv").config();
 
-const path = require("path");
 const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
+const { Pool } = require("pg");
 
 const app = express();
-
-// =============================
-// CONFIGURACIÓN BÁSICA
-// =============================
 
 app.use(cors());
 app.use(express.json());
 
-// Servir archivos estáticos
-app.use(express.static(path.join(__dirname, "public")));
+/* ================================
+   🔹 CONEXIÓN A POSTGRESQL
+================================ */
 
-console.log("WOMPI PRIVATE:", process.env.WOMPI_PRIVATE_KEY ? "OK" : "NO CARGADA");
-console.log("WOMPI INTEGRITY:", process.env.WOMPI_INTEGRITY_KEY ? "OK" : "NO CARGADA");
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+});
 
-// =============================
-// MEMORIA TEMPORAL (SIMULA DB)
-// =============================
+pool.connect()
+  .then(() => console.log("🟢 PostgreSQL conectado"))
+  .catch(err => console.error("🔴 Error conexión DB:", err));
 
-let transactions = [];
 
-// =============================
-// FUNCIÓN PARA GENERAR FIRMA
-// =============================
+/* ================================
+   🔹 FUNCIÓN GENERAR FIRMA WOMPI
+================================ */
 
 function generateSignature(reference, amount, currency) {
   const integrityKey = process.env.WOMPI_INTEGRITY_KEY;
@@ -41,94 +41,125 @@ function generateSignature(reference, amount, currency) {
     .digest("hex");
 }
 
-// =============================
-// ENDPOINT PARA GENERAR FIRMA
-// =============================
+
+/* ================================
+   🔹 ENDPOINT FIRMA
+================================ */
 
 app.get("/api/signature", (req, res) => {
   const reference = "order_" + Date.now();
-  const amount = "7900000"; // 79.000 COP en centavos
+  const amount = "7900000"; // ejemplo
   const currency = "COP";
 
   const signature = generateSignature(reference, amount, currency);
 
-  res.json({
-    reference,
-    amount,
-    currency,
-    signature
-  });
+  res.json({ reference, amount, currency, signature });
 });
 
-// =============================
-// WEBHOOK WOMPI (PROFESIONAL)
-// =============================
+
+/* ================================
+   🔹 ENDPOINT CREAR TABLAS (TEMPORAL)
+================================ */
+
+app.get("/api/setup-db", async (req, res) => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100),
+        email VARCHAR(150) UNIQUE NOT NULL,
+        password_hash TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS courses (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(150) NOT NULL,
+        description TEXT,
+        price INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS enrollments (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
+        transaction_id VARCHAR(150),
+        status VARCHAR(50),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    res.json({ message: "✅ Tablas creadas correctamente" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error creando tablas" });
+  }
+});
+
+
+/* ================================
+   🔹 WEBHOOK WOMPI
+================================ */
 
 app.post("/api/webhook-wompi", async (req, res) => {
   try {
-    console.log("📩 Webhook recibido:", JSON.stringify(req.body, null, 2));
+    console.log("📩 Webhook recibido");
 
-    const event = req.body.event;
-    const transaction = req.body.data?.transaction;
+    const event = req.body;
 
-    if (!transaction) {
-      return res.status(400).send("No transaction data");
-    }
+    if (event?.data?.transaction?.id) {
 
-    const transactionId = transaction.id;
+      const transactionId = event.data.transaction.id;
 
-    // 🔐 Validar estado REAL contra Wompi
-    const response = await axios.get(
-      `https://production.wompi.co/v1/transactions/${transactionId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.WOMPI_PRIVATE_KEY}`
+      // Consultar estado real en Wompi
+      const response = await axios.get(
+        `https://production.wompi.co/v1/transactions/${transactionId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.WOMPI_PRIVATE_KEY}`
+          }
         }
+      );
+
+      const transaction = response.data.data;
+
+      console.log("🔎 Estado real:", transaction.status);
+
+      if (transaction.status === "APPROVED") {
+
+        // Ejemplo simple (luego lo mejoramos con usuario real)
+        await pool.query(`
+          INSERT INTO enrollments (user_id, course_id, transaction_id, status)
+          VALUES ($1, $2, $3, $4)
+        `, [1, 1, transaction.id, transaction.status]);
+
+        console.log("✅ Enrollment guardado en DB");
       }
-    );
-
-    const realData = response.data.data;
-    const realStatus = realData.status;
-    const reference = realData.reference;
-    const amount = realData.amount_in_cents;
-
-    console.log("🔎 Estado real desde Wompi:", realStatus);
-
-    if (realStatus === "APPROVED") {
-      console.log("✅ Pago aprobado para:", reference);
-
-      // Simulación de guardar en DB
-      transactions.push({
-        transactionId,
-        reference,
-        amount,
-        status: realStatus,
-        date: new Date()
-      });
-
-      console.log("📦 Transacciones guardadas:");
-      console.log(transactions);
     }
 
     res.status(200).send("OK");
 
   } catch (error) {
-    console.error("❌ Error en webhook:", error.response?.data || error.message);
+    console.error("Error en webhook:", error.message);
     res.status(500).send("Error");
   }
 });
 
-// =============================
-// ENDPOINT PARA VER TRANSACCIONES (DEBUG)
-// =============================
 
-app.get("/api/transactions", (req, res) => {
-  res.json(transactions);
+/* ================================
+   🔹 HEALTH CHECK
+================================ */
+
+app.get("/", (req, res) => {
+  res.json({ message: "🚀 SoluPro API funcionando" });
 });
 
-// =============================
-// INICIAR SERVIDOR
-// =============================
+
+/* ================================
+   🔹 SERVIDOR
+================================ */
 
 const PORT = process.env.PORT || 4000;
 
