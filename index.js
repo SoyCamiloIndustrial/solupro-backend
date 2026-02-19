@@ -8,9 +8,9 @@ const { Pool } = require("pg");
 
 const app = express();
 
-// =============================
-// CONFIGURACIÓN BASE
-// =============================
+/* =============================
+   CONFIGURACIÓN BASE
+============================= */
 
 app.use(cors());
 app.use(express.json());
@@ -18,9 +18,9 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const PORT = process.env.PORT || 4000;
 
-// =============================
-// CONEXIÓN POSTGRES
-// =============================
+/* =============================
+   CONEXIÓN POSTGRES
+============================= */
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -33,17 +33,17 @@ pool.connect()
   .then(() => console.log("🟢 PostgreSQL conectado"))
   .catch(err => console.error("🔴 Error conexión DB:", err.message));
 
-// =============================
-// HEALTH CHECK
-// =============================
+/* =============================
+   HEALTH CHECK
+============================= */
 
 app.get("/", (req, res) => {
   res.json({ status: "Backend SoluPro funcionando 🚀" });
 });
 
-// =============================
-// SETUP DB
-// =============================
+/* =============================
+   SETUP DB
+============================= */
 
 app.get("/api/setup-db", async (req, res) => {
   try {
@@ -83,15 +83,14 @@ app.get("/api/setup-db", async (req, res) => {
   }
 });
 
-// =============================
-// FIRMA DINÁMICA CORRECTA
-// =============================
+/* =============================
+   FIRMA DINÁMICA - $2.000 COP
+============================= */
 
 app.get("/api/signature", (req, res) => {
   try {
     const reference = "order_" + Date.now();
-
-    const amount = "79000"; // 🔥 CORRECTO (NO multiplicar por 100)
+    const amount = "2000"; // 💰 $2.000 COP prueba
     const currency = "COP";
 
     const stringToSign =
@@ -118,9 +117,9 @@ app.get("/api/signature", (req, res) => {
   }
 });
 
-// =============================
-// WEBHOOK WOMPI
-// =============================
+/* =============================
+   WEBHOOK WOMPI
+============================= */
 
 app.post("/api/webhook-wompi", async (req, res) => {
   try {
@@ -141,7 +140,7 @@ app.post("/api/webhook-wompi", async (req, res) => {
       customer_email
     } = tx;
 
-    // Guardar transacción
+    // Guardar transacción (evita duplicados)
     await pool.query(
       `INSERT INTO transactions (wompi_id, email, amount, status)
        VALUES ($1, $2, $3, $4)
@@ -170,9 +169,27 @@ app.post("/api/webhook-wompi", async (req, res) => {
   }
 });
 
-// =============================
-// INICIAR SERVIDOR
-// =============================
+/* =============================
+   ENDPOINTS DE CONSULTA
+============================= */
+
+app.get("/api/transactions", async (req, res) => {
+  const result = await pool.query(
+    "SELECT * FROM transactions ORDER BY created_at DESC"
+  );
+  res.json(result.rows);
+});
+
+app.get("/api/enrollments", async (req, res) => {
+  const result = await pool.query(
+    "SELECT * FROM enrollments ORDER BY created_at DESC"
+  );
+  res.json(result.rows);
+});
+
+/* =============================
+   INICIAR SERVIDOR
+============================= */
 
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
