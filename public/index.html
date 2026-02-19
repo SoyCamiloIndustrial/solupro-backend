@@ -1,42 +1,56 @@
 <!DOCTYPE html>
-<html lang="es">
+<html>
 <head>
   <meta charset="UTF-8" />
-  <title>Comprar Curso</title>
+  <title>Comprar Curso - $2.000 COP</title>
 </head>
 <body>
 
-<h1>Comprar Curso - $2.000 COP</h1>
+  <h1>Comprar Curso - $2.000 COP</h1>
 
-<div id="checkout"></div>
+  <button onclick="pagar()">Pagar con Wompi</button>
 
-<script>
-async function loadWompi() {
-  try {
-    const response = await fetch("/api/signature");
-    const data = await response.json();
+  <!-- Script del widget SIEMPRE antes de usarlo -->
+  <script src="https://checkout.wompi.co/widget.js"></script>
 
-    const widgetHTML = `
-      <script
-        src="https://checkout.wompi.co/widget.js"
-        data-render="button"
-        data-public-key="pub_prod_i80UNdXv69FRkesjzaKNMyUHvNnDb5Mu"
-        data-currency="${data.currency}"
-        data-amount-in-cents="${data.amount}"
-        data-reference="${data.reference}"
-        data-signature-integrity="${data.signature}">
-      <\/script>
-    `;
+  <script>
+    async function pagar() {
 
-    document.getElementById("checkout").innerHTML = widgetHTML;
+      const PUBLIC_KEY = "pub_prod_i80UNdXv69FRkesjzaKNMyUHvNnDb5Mu";
+      const BACKEND_URL = "https://solupro-backend-production.up.railway.app";
 
-  } catch (err) {
-    console.error("Error cargando firma:", err);
-  }
-}
+      const amountInCents = "200000"; // 2000 COP
+      const currency = "COP";
+      const reference = "order_" + Date.now();
 
-loadWompi();
-</script>
+      try {
+
+        const response = await fetch(
+          `${BACKEND_URL}/api/signature?reference=${reference}&amount=${amountInCents}&currency=${currency}`
+        );
+
+        const data = await response.json();
+
+        const checkout = new WidgetCheckout({
+          currency: currency,
+          amountInCents: amountInCents,
+          reference: reference,
+          publicKey: PUBLIC_KEY,
+          signature: {
+            integrity: data.signature
+          }
+        });
+
+        checkout.open(function(result) {
+          console.log("Resultado:", result);
+        });
+
+      } catch (error) {
+        console.error("Error:", error);
+        alert("Error cargando pago");
+      }
+    }
+  </script>
 
 </body>
 </html>
