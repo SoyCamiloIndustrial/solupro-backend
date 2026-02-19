@@ -2,45 +2,45 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
+const path = require("path");
+const crypto = require("crypto");
+const axios = require("axios");
 const { Pool } = require("pg");
 
 const app = express();
 
+// =============================
+// CONFIGURACIÓN BASE
+// =============================
+
 app.use(cors());
 app.use(express.json());
+app.use(express.static(path.join(__dirname, "public")));
 
-/* =====================================
-   🔹 DEBUG VARIABLES
-===================================== */
+const PORT = process.env.PORT || 4000;
 
-console.log("🚨 DATABASE_URL:", process.env.DATABASE_URL);
-
-/* =====================================
-   🔹 CONEXIÓN POSTGRES
-===================================== */
+if (!process.env.DATABASE_URL) {
+  console.log("⚠️ DATABASE_URL no definida");
+}
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
+  ssl: process.env.DATABASE_URL
+    ? { rejectUnauthorized: false }
+    : false
 });
 
-pool.connect()
-  .then(() => console.log("🟢 PostgreSQL conectado"))
-  .catch((err) => console.error("🔴 Error conexión DB:", err));
-
-/* =====================================
-   🔹 HEALTH CHECK
-===================================== */
+// =============================
+// HEALTH CHECK
+// =============================
 
 app.get("/", (req, res) => {
   res.json({ status: "Backend SoluPro funcionando 🚀" });
 });
 
-/* =====================================
-   🔹 CREAR TABLAS (solo ejecutar una vez)
-===================================== */
+// =============================
+// CREAR TABLAS
+// =============================
 
 app.get("/api/setup-db", async (req, res) => {
   try {
@@ -53,129 +53,148 @@ app.get("/api/setup-db", async (req, res) => {
     `);
 
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS transactions (
-        id SERIAL PRIMARY KEY,
-        wompi_id TEXT UNIQUE,
-        email TEXT,
-        amount INTEGER,
-        status TEXT,
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-    `);
-
-    await pool.query(`
       CREATE TABLE IF NOT EXISTS enrollments (
         id SERIAL PRIMARY KEY,
-        email TEXT,
-        course_id INTEGER,
+        user_id INTEGER REFERENCES users(id),
+        course_id INTEGER NOT NULL,
+        transaction_id TEXT,
+        status TEXT DEFAULT 'pending',
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
 
     res.json({ message: "✅ Tablas creadas correctamente" });
-
-  } catch (error) {
-    console.error("❌ ERROR SETUP:", error);
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    console.error("❌ Error creando tablas:", err);
+    res.status(500).json({
+      message: "Error creando tablas",
+      errorMessage: err.message,
+      errorDetail: err
+    });
   }
 });
 
-/* =====================================
-   🔹 WEBHOOK WOMPI
-===================================== */
+// =============================
+// GENERAR FIRMA DINÁMICA
+// =============================
+
+app.get("/api/signature", (req, res) => {
+  try {
+    const reference = "order_" + Date.now();
+    const amount = "7900000"; // 79.000 COP en centavos
+    const currency = "COP";
+
+    const stringToSign =
+      reference +
+      amount +
+      currency +
+      process.env.WOMPI_INTEGRITY_KEY;
+
+    const signature = crypto
+      .createHash("sha256")
+      .update(stringToSign)
+      .digest("hex");
+
+    res.json({
+      reference,
+      amount,
+      currency,
+      signature
+    });
+  } catch (err) {
+    console.error("❌ Error generando firma:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================
+// CREAR TRANSACCIÓN MANUAL (OPCIONAL)
+// =============================
+
+app.post("/api/create-payment", async (req, res) => {
+  try {
+    const { amount, email, token } = req.body;
+
+    const response = await axios.post(
+      "https://production.wompi.co/v1/transactions",
+      {
+        amount_in_cents: amount,
+        currency: "COP",
+        reference: "order_" + Date.now(),
+        customer_email: email,
+        payment_method: {
+          type: "CARD",
+          token: token,
+          installments: 1
+        }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.WOMPI_PRIVATE_KEY}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    res.json(response.data);
+  } catch (error) {
+    console.error("❌ Error Wompi:", error.response?.data || error.message);
+    res.status(500).json({
+      error: "Error creando pago",
+      detail: error.response?.data || error.message
+    });
+  }
+});
+
+// =============================
+// WEBHOOK WOMPI
+// =============================
 
 app.post("/api/webhook-wompi", async (req, res) => {
   try {
-    console.log("📩 Webhook recibido:", JSON.stringify(req.body, null, 2));
+    console.log("📩 Webhook recibido:", req.body);
 
     const event = req.body;
 
-    if (!event || !event.data || !event.data.transaction) {
-      return res.status(400).json({ error: "Evento inválido" });
-    }
+    if (
+      event?.data?.transaction?.status === "APPROVED"
+    ) {
+      const transactionId = event.data.transaction.id;
+      const email = event.data.transaction.customer_email;
 
-    const transaction = event.data.transaction;
+      const userResult = await pool.query(
+        "INSERT INTO users(email) VALUES($1) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email RETURNING id",
+        [email]
+      );
 
-    const {
-      id: wompiId,
-      amount_in_cents,
-      status,
-      customer_email,
-      reference
-    } = transaction;
+      const userId = userResult.rows[0].id;
 
-    // 1️⃣ Guardar transacción (evitar duplicado)
-    const existing = await pool.query(
-      "SELECT id FROM transactions WHERE wompi_id = $1",
-      [wompiId]
-    );
-
-    if (existing.rows.length === 0) {
       await pool.query(
-        `INSERT INTO transactions (wompi_id, email, amount, status)
-         VALUES ($1, $2, $3, $4)`,
-        [wompiId, customer_email, amount_in_cents, status]
+        "INSERT INTO enrollments(user_id, course_id, transaction_id, status) VALUES($1, $2, $3, $4)",
+        [userId, 1, transactionId, "active"]
       );
 
-      console.log("💾 Transacción guardada");
-    } else {
-      console.log("⚠️ Transacción ya existe");
+      console.log("✅ Enrollment creado para:", email);
     }
 
-    // 2️⃣ Si está aprobada → crear enrollment
-    if (status === "APPROVED") {
-
-      const enrollmentExists = await pool.query(
-        `SELECT id FROM enrollments 
-         WHERE email = $1 AND course_id = $2`,
-        [customer_email, 1] // temporal curso 1
-      );
-
-      if (enrollmentExists.rows.length === 0) {
-        await pool.query(
-          `INSERT INTO enrollments (email, course_id)
-           VALUES ($1, $2)`,
-          [customer_email, 1]
-        );
-
-        console.log("🎓 Enrollment creado");
-      } else {
-        console.log("⚠️ Enrollment ya existía");
-      }
-    }
-
-    res.status(200).json({ received: true });
-
-  } catch (error) {
-    console.error("❌ Error webhook:", error);
-    res.status(500).json({ error: "Error procesando webhook" });
+    res.status(200).send("OK");
+  } catch (err) {
+    console.error("❌ Error webhook:", err);
+    res.status(500).send("Error webhook");
   }
 });
 
-/* =====================================
-   🔹 ENDPOINT PARA VER TRANSACTIONS
-===================================== */
+// =============================
+// INICIAR SERVIDOR
+// =============================
 
-app.get("/api/transactions", async (req, res) => {
-  const result = await pool.query("SELECT * FROM transactions ORDER BY created_at DESC");
-  res.json(result.rows);
-});
+app.listen(PORT, async () => {
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
 
-/* =====================================
-   🔹 ENDPOINT PARA VER ENROLLMENTS
-===================================== */
-
-app.get("/api/enrollments", async (req, res) => {
-  const result = await pool.query("SELECT * FROM enrollments ORDER BY created_at DESC");
-  res.json(result.rows);
-});
-
-/* =====================================
-   🔹 INICIAR SERVIDOR
-===================================== */
-
-const PORT = process.env.PORT || 4000;
-
-app.listen(PORT, () => {
-  console.log("🚀 Servidor corriendo en puerto", PORT);
+  try {
+    await pool.query("SELECT 1");
+    console.log("🟢 PostgreSQL conectado");
+  } catch (err) {
+    console.log("🔴 Error conexión DB:", err.message);
+  }
 });
