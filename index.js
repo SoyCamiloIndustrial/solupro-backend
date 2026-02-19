@@ -10,10 +10,10 @@ app.use(cors());
 app.use(express.json());
 
 /* =====================================
-   🔎 DEBUG VARIABLES
+   🔹 DEBUG VARIABLES
 ===================================== */
 
-console.log("🚨 DEBUG DATABASE_URL:", process.env.DATABASE_URL);
+console.log("🚨 DATABASE_URL:", process.env.DATABASE_URL);
 
 /* =====================================
    🔹 CONEXIÓN POSTGRES
@@ -39,12 +39,11 @@ app.get("/", (req, res) => {
 });
 
 /* =====================================
-   🔹 SETUP DB (CREA TABLAS)
+   🔹 CREAR TABLAS (solo ejecutar una vez)
 ===================================== */
 
 app.get("/api/setup-db", async (req, res) => {
   try {
-    // USERS
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -53,11 +52,10 @@ app.get("/api/setup-db", async (req, res) => {
       );
     `);
 
-    // TRANSACTIONS
     await pool.query(`
       CREATE TABLE IF NOT EXISTS transactions (
         id SERIAL PRIMARY KEY,
-        wompi_id TEXT,
+        wompi_id TEXT UNIQUE,
         email TEXT,
         amount INTEGER,
         status TEXT,
@@ -65,7 +63,6 @@ app.get("/api/setup-db", async (req, res) => {
       );
     `);
 
-    // ENROLLMENTS
     await pool.query(`
       CREATE TABLE IF NOT EXISTS enrollments (
         id SERIAL PRIMARY KEY,
@@ -78,18 +75,103 @@ app.get("/api/setup-db", async (req, res) => {
     res.json({ message: "✅ Tablas creadas correctamente" });
 
   } catch (error) {
-    console.error("❌ ERROR COMPLETO SETUP:", error);
-
-    res.status(500).json({
-      message: "Error creando tablas",
-      errorMessage: error.message,
-      errorDetail: error
-    });
+    console.error("❌ ERROR SETUP:", error);
+    res.status(500).json({ error: error.message });
   }
 });
 
 /* =====================================
-   🔹 SERVIDOR
+   🔹 WEBHOOK WOMPI
+===================================== */
+
+app.post("/api/webhook-wompi", async (req, res) => {
+  try {
+    console.log("📩 Webhook recibido:", JSON.stringify(req.body, null, 2));
+
+    const event = req.body;
+
+    if (!event || !event.data || !event.data.transaction) {
+      return res.status(400).json({ error: "Evento inválido" });
+    }
+
+    const transaction = event.data.transaction;
+
+    const {
+      id: wompiId,
+      amount_in_cents,
+      status,
+      customer_email,
+      reference
+    } = transaction;
+
+    // 1️⃣ Guardar transacción (evitar duplicado)
+    const existing = await pool.query(
+      "SELECT id FROM transactions WHERE wompi_id = $1",
+      [wompiId]
+    );
+
+    if (existing.rows.length === 0) {
+      await pool.query(
+        `INSERT INTO transactions (wompi_id, email, amount, status)
+         VALUES ($1, $2, $3, $4)`,
+        [wompiId, customer_email, amount_in_cents, status]
+      );
+
+      console.log("💾 Transacción guardada");
+    } else {
+      console.log("⚠️ Transacción ya existe");
+    }
+
+    // 2️⃣ Si está aprobada → crear enrollment
+    if (status === "APPROVED") {
+
+      const enrollmentExists = await pool.query(
+        `SELECT id FROM enrollments 
+         WHERE email = $1 AND course_id = $2`,
+        [customer_email, 1] // temporal curso 1
+      );
+
+      if (enrollmentExists.rows.length === 0) {
+        await pool.query(
+          `INSERT INTO enrollments (email, course_id)
+           VALUES ($1, $2)`,
+          [customer_email, 1]
+        );
+
+        console.log("🎓 Enrollment creado");
+      } else {
+        console.log("⚠️ Enrollment ya existía");
+      }
+    }
+
+    res.status(200).json({ received: true });
+
+  } catch (error) {
+    console.error("❌ Error webhook:", error);
+    res.status(500).json({ error: "Error procesando webhook" });
+  }
+});
+
+/* =====================================
+   🔹 ENDPOINT PARA VER TRANSACTIONS
+===================================== */
+
+app.get("/api/transactions", async (req, res) => {
+  const result = await pool.query("SELECT * FROM transactions ORDER BY created_at DESC");
+  res.json(result.rows);
+});
+
+/* =====================================
+   🔹 ENDPOINT PARA VER ENROLLMENTS
+===================================== */
+
+app.get("/api/enrollments", async (req, res) => {
+  const result = await pool.query("SELECT * FROM enrollments ORDER BY created_at DESC");
+  res.json(result.rows);
+});
+
+/* =====================================
+   🔹 INICIAR SERVIDOR
 ===================================== */
 
 const PORT = process.env.PORT || 4000;
