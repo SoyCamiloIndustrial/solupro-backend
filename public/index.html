@@ -2,55 +2,32 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>Comprar Curso - $2.000 COP</title>
+  <title>SoluPro - Pago</title>
+  <script src="https://checkout.wompi.co/widget.js"></script>
 </head>
 <body>
 
-  <h1>Comprar Curso - $2.000 COP</h1>
+<h1>Comprar Curso - $2.000 COP</h1>
+<button id="payBtn">Pagar con Wompi</button>
 
-  <button onclick="pagar()">Pagar con Wompi</button>
+<script>
+  document.getElementById("payBtn").addEventListener("click", async () => {
 
-  <!-- Script del widget SIEMPRE antes de usarlo -->
-  <script src="https://checkout.wompi.co/widget.js"></script>
+    const response = await fetch("/api/signature");
+    const data = await response.json();
 
-  <script>
-    async function pagar() {
+    const checkout = new WidgetCheckout({
+      currency: data.currency,
+      amountInCents: data.amountInCents,
+      reference: data.reference,
+      publicKey: data.publicKey,
+      signature: { integrity: data.signature },
+      redirectUrl: window.location.origin
+    });
 
-      const PUBLIC_KEY = "pub_prod_i80UNdXv69FRkesjzaKNMyUHvNnDb5Mu";
-      const BACKEND_URL = "https://solupro-backend-production.up.railway.app";
-
-      const amountInCents = "200000"; // 2000 COP
-      const currency = "COP";
-      const reference = "order_" + Date.now();
-
-      try {
-
-        const response = await fetch(
-          `${BACKEND_URL}/api/signature?reference=${reference}&amount=${amountInCents}&currency=${currency}`
-        );
-
-        const data = await response.json();
-
-        const checkout = new WidgetCheckout({
-          currency: currency,
-          amountInCents: amountInCents,
-          reference: reference,
-          publicKey: PUBLIC_KEY,
-          signature: {
-            integrity: data.signature
-          }
-        });
-
-        checkout.open(function(result) {
-          console.log("Resultado:", result);
-        });
-
-      } catch (error) {
-        console.error("Error:", error);
-        alert("Error cargando pago");
-      }
-    }
-  </script>
+    checkout.open();
+  });
+</script>
 
 </body>
 </html>
