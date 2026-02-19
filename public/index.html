@@ -2,11 +2,11 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <title>Comprar Curso - Marca Personal</title>
+  <title>Comprar Curso</title>
 </head>
 <body>
 
-<h1>Comprar Curso - Marca Personal</h1>
+<h1>Comprar Curso - $2.000 COP</h1>
 
 <div id="checkout"></div>
 
@@ -16,16 +16,19 @@ async function loadWompi() {
     const response = await fetch("/api/signature");
     const data = await response.json();
 
-    const script = document.createElement("script");
-    script.src = "https://checkout.wompi.co/widget.js";
-    script.setAttribute("data-render", "button");
-    script.setAttribute("data-public-key", "pub_prod_i80UNdXv69FRkesjzaKNMyUHvNnDb5Mu");
-    script.setAttribute("data-currency", data.currency);
-    script.setAttribute("data-amount-in-cents", data.amount);
-    script.setAttribute("data-reference", data.reference);
-    script.setAttribute("data-signature-integrity", data.signature);
+    const widgetHTML = `
+      <script
+        src="https://checkout.wompi.co/widget.js"
+        data-render="button"
+        data-public-key="pub_prod_i80UNdXv69FRkesjzaKNMyUHvNnDb5Mu"
+        data-currency="${data.currency}"
+        data-amount-in-cents="${data.amount}"
+        data-reference="${data.reference}"
+        data-signature-integrity="${data.signature}">
+      <\/script>
+    `;
 
-    document.getElementById("checkout").appendChild(script);
+    document.getElementById("checkout").innerHTML = widgetHTML;
 
   } catch (err) {
     console.error("Error cargando firma:", err);
