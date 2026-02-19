@@ -9,15 +9,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* =============================
+/* =====================================
    🔎 DEBUG VARIABLES
-============================= */
+===================================== */
 
 console.log("🚨 DEBUG DATABASE_URL:", process.env.DATABASE_URL);
 
-/* =============================
-   🔹 CONEXIÓN A POSTGRES
-============================= */
+/* =====================================
+   🔹 CONEXIÓN POSTGRES
+===================================== */
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -28,22 +28,23 @@ const pool = new Pool({
 
 pool.connect()
   .then(() => console.log("🟢 PostgreSQL conectado"))
-  .catch(err => console.error("🔴 Error conexión DB:", err));
+  .catch((err) => console.error("🔴 Error conexión DB:", err));
 
-/* =============================
+/* =====================================
    🔹 HEALTH CHECK
-============================= */
+===================================== */
 
 app.get("/", (req, res) => {
   res.json({ status: "Backend SoluPro funcionando 🚀" });
 });
 
-/* =============================
-   🔹 SETUP DB
-============================= */
+/* =====================================
+   🔹 SETUP DB (CREA TABLAS)
+===================================== */
 
 app.get("/api/setup-db", async (req, res) => {
   try {
+    // USERS
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -52,6 +53,7 @@ app.get("/api/setup-db", async (req, res) => {
       );
     `);
 
+    // TRANSACTIONS
     await pool.query(`
       CREATE TABLE IF NOT EXISTS transactions (
         id SERIAL PRIMARY KEY,
@@ -63,6 +65,7 @@ app.get("/api/setup-db", async (req, res) => {
       );
     `);
 
+    // ENROLLMENTS
     await pool.query(`
       CREATE TABLE IF NOT EXISTS enrollments (
         id SERIAL PRIMARY KEY,
@@ -72,17 +75,22 @@ app.get("/api/setup-db", async (req, res) => {
       );
     `);
 
-    res.json({ message: "Tablas creadas correctamente ✅" });
+    res.json({ message: "✅ Tablas creadas correctamente" });
 
   } catch (error) {
-    console.error("❌ Error creando tablas:", error);
-    res.status(500).json({ error: error.message });
+    console.error("❌ ERROR COMPLETO SETUP:", error);
+
+    res.status(500).json({
+      message: "Error creando tablas",
+      errorMessage: error.message,
+      errorDetail: error
+    });
   }
 });
 
-/* =============================
+/* =====================================
    🔹 SERVIDOR
-============================= */
+===================================== */
 
 const PORT = process.env.PORT || 4000;
 
