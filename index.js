@@ -1,85 +1,118 @@
 require("dotenv").config();
 
-const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
-const axios = require("axios");
+const crypto = require("crypto");
 const { Pool } = require("pg");
 
 const app = express();
 
+// =============================
+// CONFIGURACIÓN BÁSICA
+// =============================
+
 app.use(cors());
 app.use(express.json());
 
-/* =========================
-   🔹 CONEXIÓN POSTGRES
-========================= */
+// =============================
+// CONEXIÓN A POSTGRES (Railway)
+// =============================
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  ssl: {
+    rejectUnauthorized: false,
+  },
 });
 
-pool.connect()
-  .then(() => console.log("🟢 PostgreSQL conectado"))
-  .catch(err => console.error("🔴 Error conexión DB:", err));
+// =============================
+// TEST SERVER
+// =============================
 
-/* =========================
-   🔹 SETUP DB
-========================= */
+app.get("/", (req, res) => {
+  res.json({ status: "Backend SoluPro funcionando 🚀" });
+});
+
+// =============================
+// CREAR TABLAS
+// =============================
 
 app.get("/api/setup-db", async (req, res) => {
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
-        name VARCHAR(100),
-        email VARCHAR(150) UNIQUE NOT NULL,
-        password_hash TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        email TEXT UNIQUE NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
       );
-    `);
 
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS courses (
+      CREATE TABLE IF NOT EXISTS transactions (
         id SERIAL PRIMARY KEY,
-        title VARCHAR(150) NOT NULL,
-        description TEXT,
-        price INTEGER NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        wompi_id TEXT,
+        email TEXT,
+        amount INTEGER,
+        status TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
       );
-    `);
 
-    await pool.query(`
       CREATE TABLE IF NOT EXISTS enrollments (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-        transaction_id VARCHAR(150),
-        status VARCHAR(50),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        email TEXT,
+        course_id INTEGER,
+        created_at TIMESTAMP DEFAULT NOW()
       );
     `);
 
-    res.json({ message: "✅ Tablas creadas correctamente" });
+    res.json({ message: "Tablas creadas correctamente ✅" });
 
-  } catch (err) {
-    console.error("❌ ERROR DB:", err);
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    console.error("Error creando tablas:", error);
+    res.status(500).json({ error: "Error creando tablas" });
   }
 });
 
-/* =========================
-   🔹 HEALTH CHECK
-========================= */
+// =============================
+// WEBHOOK WOMPI
+// =============================
 
-app.get("/", (req, res) => {
-  res.json({ message: "🚀 SoluPro API funcionando" });
+app.post("/api/webhook-wompi", async (req, res) => {
+  try {
+    const event = req.body.data;
+
+    const wompiId = event.id;
+    const amount = event.amount_in_cents;
+    const status = event.status;
+    const email = event.customer_email;
+
+    console.log("Evento recibido:", wompiId, status);
+
+    // Guardar transacción
+    await pool.query(
+      "INSERT INTO transactions (wompi_id, email, amount, status) VALUES ($1,$2,$3,$4)",
+      [wompiId, email, amount, status]
+    );
+
+    // Si fue aprobada, crear acceso
+    if (status === "APPROVED") {
+      await pool.query(
+        "INSERT INTO enrollments (email, course_id) VALUES ($1,$2)",
+        [email, 1]
+      );
+
+      console.log("Enrollment creado ✅");
+    }
+
+    res.status(200).send("OK");
+
+  } catch (error) {
+    console.error("Error webhook:", error);
+    res.status(500).send("Error");
+  }
 });
 
-/* =========================
-   🔹 SERVIDOR
-========================= */
+// =============================
+// INICIAR SERVIDOR
+// =============================
 
 const PORT = process.env.PORT || 4000;
 
