@@ -1,66 +1,80 @@
 require("dotenv").config();
-const express = require("express");
+const path = require("path");
 const crypto = require("crypto");
+const express = require("express");
 const cors = require("cors");
+const { Pool } = require("pg");
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
 
-// =============================
-// HEALTH CHECK
-// =============================
+/* ===============================
+   🔹 SERVIR FRONTEND PRIMERO
+================================ */
+app.use(express.static(path.join(__dirname, "public")));
 
-app.get("/", (req, res) => {
+/* ===============================
+   🔹 RUTA BASE SOLO PARA API
+================================ */
+app.get("/api", (req, res) => {
   res.json({ status: "Backend SoluPro funcionando 🚀" });
 });
 
-// =============================
-// GENERAR FIRMA CORRECTA WOMPI
-// =============================
+/* ===============================
+   🔹 CONEXIÓN POSTGRES
+================================ */
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
+pool.connect()
+  .then(() => console.log("🟢 PostgreSQL conectado"))
+  .catch(err => console.error("🔴 Error DB:", err));
+
+/* ===============================
+   🔹 FIRMA WOMPI (2.000 COP)
+================================ */
 app.get("/api/signature", (req, res) => {
 
-  const { reference, amount, currency } = req.query;
+  const reference = "order_" + Date.now();
+  const amountInCents = 200000; // 2.000 COP
+  const currency = "COP";
 
-  if (!reference || !amount || !currency) {
-    return res.status(400).json({ error: "Faltan parámetros" });
-  }
-
-  const integrityKey = process.env.WOMPI_INTEGRITY_KEY;
-
-  // 🔥 IMPORTANTE: TODO COMO STRING EXACTO
-  const stringToSign = `${reference}${amount}${currency}${integrityKey}`;
+  const stringToSign =
+    reference +
+    amountInCents +
+    currency +
+    process.env.WOMPI_INTEGRITY_KEY;
 
   const signature = crypto
     .createHash("sha256")
     .update(stringToSign)
     .digest("hex");
 
-  console.log("🟢 Firma generada correctamente");
-
   res.json({
-    signature
+    reference,
+    amountInCents,
+    currency,
+    signature,
+    publicKey: process.env.WOMPI_PUBLIC_KEY
   });
-
 });
 
-// =============================
-// WEBHOOK
-// =============================
-
-app.post("/api/webhook-wompi", (req, res) => {
-  console.log("📩 Webhook recibido:", req.body);
-  res.status(200).send("OK");
+/* ===============================
+   🔹 WEBHOOK
+================================ */
+app.post("/api/webhook-wompi", async (req, res) => {
+  console.log("📩 Webhook recibido:");
+  console.log(JSON.stringify(req.body, null, 2));
+  res.sendStatus(200);
 });
 
-// =============================
-// START SERVER
-// =============================
-
+/* ===============================
+   🔹 START SERVER
+================================ */
 const PORT = process.env.PORT || 8080;
-
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
 });
