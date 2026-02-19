@@ -90,7 +90,9 @@ app.get("/api/setup-db", async (req, res) => {
 app.get("/api/signature", (req, res) => {
   try {
     const reference = "order_" + Date.now();
-    const amount = "2000"; // 💰 $2.000 COP prueba
+
+    // 🔥 2.000 COP = 200000 centavos
+    const amount = "200000";
     const currency = "COP";
 
     const stringToSign =
@@ -140,7 +142,6 @@ app.post("/api/webhook-wompi", async (req, res) => {
       customer_email
     } = tx;
 
-    // Guardar transacción (evita duplicados)
     await pool.query(
       `INSERT INTO transactions (wompi_id, email, amount, status)
        VALUES ($1, $2, $3, $4)
@@ -148,7 +149,6 @@ app.post("/api/webhook-wompi", async (req, res) => {
       [wompiId, customer_email, amount_in_cents, status]
     );
 
-    // Si pago aprobado → crear enrollment
     if (status === "APPROVED") {
 
       await pool.query(
