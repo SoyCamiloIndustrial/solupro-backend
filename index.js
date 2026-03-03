@@ -26,13 +26,13 @@ app.get("/", (req, res) => {
 });
 
 /* ======================================
-   PUBLIC KEY (Frontend)
+   PUBLIC KEY
 ====================================== */
 
 app.get("/api/public-key", (req, res) => {
   if (!process.env.WOMPI_PUBLIC_KEY) {
     return res.status(500).json({
-      error: "WOMPI_PUBLIC_KEY no configurada"
+      error: "WOMPI_PUBLIC_KEY no configurada en Railway"
     });
   }
 
@@ -42,7 +42,7 @@ app.get("/api/public-key", (req, res) => {
 });
 
 /* ======================================
-   SIGNATURE (Widget)
+   SIGNATURE
 ====================================== */
 
 app.get("/api/signature", (req, res) => {
@@ -51,17 +51,15 @@ app.get("/api/signature", (req, res) => {
     const amount = "200000"; // 2.000 COP en centavos
     const currency = "COP";
 
-    if (!process.env.WOMPI_INTEGRITY_KEY) {
+    const integrityKey = process.env.WOMPI_INTEGRITY_KEY;
+
+    if (!integrityKey) {
       return res.status(500).json({
         error: "WOMPI_INTEGRITY_KEY no configurada"
       });
     }
 
-    const stringToSign =
-      reference +
-      amount +
-      currency +
-      process.env.WOMPI_INTEGRITY_KEY;
+    const stringToSign = reference + amount + currency + integrityKey;
 
     const signature = crypto
       .createHash("sha256")
@@ -76,78 +74,111 @@ app.get("/api/signature", (req, res) => {
     });
 
   } catch (err) {
-    console.error("❌ Error generando firma:", err);
+    console.error(err);
     res.status(500).json({ error: "Error generando firma" });
   }
 });
 
 /* ======================================
-   WEBHOOK WOMPI (CAJA REGISTRADORA)
+   WEBHOOK WOMPI
 ====================================== */
 
 app.post("/api/wompi-webhook", async (req, res) => {
   try {
     const { event, data, signature, timestamp } = req.body;
 
-    if (!event || !data || !signature || !timestamp) {
+    if (!event || !data) {
       return res.status(400).send("Invalid payload");
     }
 
     const transaction = data.transaction;
 
-    /* ---------- VALIDAR FIRMA ---------- */
+    if (!transaction) {
+      return res.status(400).send("No transaction data");
+    }
 
+    const eventsSecret = process.env.WOMPI_EVENTS_SECRET;
+
+    if (!eventsSecret) {
+      console.error("❌ WOMPI_EVENTS_SECRET no definido");
+      return res.status(500).send("Server config error");
+    }
+
+    // 🔐 Validación firma webhook
     const stringToSign =
       transaction.id +
       transaction.status +
       transaction.amount_in_cents +
       timestamp +
-      process.env.WOMPI_EVENTS_SECRET;
+      eventsSecret;
 
-    const expectedSignature = crypto
+    const hash = crypto
       .createHash("sha256")
       .update(stringToSign)
       .digest("hex");
 
-    if (expectedSignature !== signature.checksum) {
+    if (hash !== signature?.checksum) {
       console.error("⚠️ Firma inválida");
       return res.status(401).send("Invalid signature");
     }
 
-    /* ---------- SI APROBADO ---------- */
+    console.log("✅ Webhook válido recibido:", transaction.status);
 
-    if (event === "transaction.updated" && transaction.status === "APPROVED") {
+    // 💾 Guardar en base de datos
+    await pool.query(
+      `INSERT INTO transactions (wompi_id, email, amount, status)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (wompi_id)
+       DO UPDATE SET status = EXCLUDED.status`,
+      [
+        transaction.id,
+        transaction.customer_email,
+        transaction.amount_in_cents,
+        transaction.status
+      ]
+    );
 
-      const wompiId = transaction.id;
-      const email = transaction.customer_email;
-      const amount = transaction.amount_in_cents;
-      const status = transaction.status;
-
-      // Evitar duplicados
-      const existing = await pool.query(
-        "SELECT id FROM transactions WHERE wompi_id = $1",
-        [wompiId]
-      );
-
-      if (existing.rows.length > 0) {
-        console.log("⚠️ Transacción ya registrada.");
-        return res.status(200).send("Already processed");
-      }
-
-      await pool.query(
-        `INSERT INTO transactions (wompi_id, email, amount, status)
-         VALUES ($1, $2, $3, $4)`,
-        [wompiId, email, amount, status]
-      );
-
-      console.log("✅ Pago guardado en DB:", wompiId);
-    }
-
-    return res.status(200).send("OK");
+    res.status(200).send("OK");
 
   } catch (error) {
     console.error("❌ Error webhook:", error);
-    return res.status(500).send("Internal Server Error");
+    res.status(500).send("Internal Server Error");
+  }
+});
+
+/* ======================================
+   MIS CURSOS
+====================================== */
+
+app.get("/api/my-courses/:email", async (req, res) => {
+  try {
+    const { email } = req.params;
+
+    const result = await pool.query(
+      `SELECT wompi_id, amount, status, created_at
+       FROM transactions
+       WHERE email = $1
+       AND status = 'APPROVED'
+       ORDER BY created_at DESC`,
+      [email]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No tienes cursos activos aún."
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "¡Bienvenido a tus cursos!",
+      courses: result.rows
+    });
+
+  } catch (error) {
+    console.error("❌ Error buscando cursos:", error);
+    res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
