@@ -1,7 +1,10 @@
 require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
+const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
 const pool = require("./db");
 
 const app = express();
@@ -15,7 +18,33 @@ app.use(express.json());
 
 console.log("🔎 WOMPI_PUBLIC_KEY:", process.env.WOMPI_PUBLIC_KEY ? "OK" : "NO DEFINIDA");
 console.log("🔎 WOMPI_INTEGRITY_KEY:", process.env.WOMPI_INTEGRITY_KEY ? "OK" : "NO DEFINIDA");
-console.log("🔎 WOMPI_EVENTS_SECRET:", process.env.WOMPI_EVENTS_SECRET ? "OK" : "NO DEFINIDA");
+console.log("🔎 JWT_SECRET:", process.env.JWT_SECRET ? "OK" : "NO DEFINIDA");
+
+/* ======================================
+   JWT MIDDLEWARE
+====================================== */
+
+function verifyToken(req, res, next) {
+
+  const authHeader = req.headers["authorization"];
+
+  if (!authHeader) {
+    return res.status(401).json({ error: "Token requerido" });
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+
+    if (err) {
+      return res.status(403).json({ error: "Token inválido" });
+    }
+
+    req.user = decoded;
+
+    next();
+  });
+}
 
 /* ======================================
    ROOT
@@ -26,38 +55,126 @@ app.get("/", (req, res) => {
 });
 
 /* ======================================
-   PUBLIC KEY
+   LOGIN
+====================================== */
+
+app.post("/api/login", async (req, res) => {
+
+  try {
+
+    const { email, password } = req.body;
+
+    const result = await pool.query(
+      "SELECT * FROM users WHERE email = $1",
+      [email]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "Usuario no encontrado" });
+    }
+
+    const user = result.rows[0];
+
+    const validPassword = await bcrypt.compare(password, user.password);
+
+    if (!validPassword) {
+      return res.status(401).json({ error: "Password incorrecta" });
+    }
+
+    const token = jwt.sign(
+      {
+        userId: user.id,
+        email: user.email
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email
+      }
+    });
+
+  } catch (error) {
+
+    console.error("ERROR LOGIN:", error);
+
+    res.status(500).json({
+      error: "Error en login"
+    });
+
+  }
+
+});
+
+/* ======================================
+   MIS CURSOS
+====================================== */
+
+app.get("/api/my-courses", verifyToken, async (req, res) => {
+
+  try {
+
+    const email = req.user.email;
+
+    console.log("EMAIL TOKEN:", email);
+
+    const result = await pool.query(
+      "SELECT * FROM enrollments WHERE email = $1",
+      [email]
+    );
+
+    res.json({
+      success: true,
+      courses: result.rows
+    });
+
+  } catch (error) {
+
+    console.error("ERROR /api/my-courses:", error);
+
+    res.status(500).json({
+      error: "Error obteniendo cursos"
+    });
+
+  }
+
+});
+
+/* ======================================
+   WOMPI PUBLIC KEY
 ====================================== */
 
 app.get("/api/public-key", (req, res) => {
+
   if (!process.env.WOMPI_PUBLIC_KEY) {
     return res.status(500).json({
-      error: "WOMPI_PUBLIC_KEY no configurada en Railway"
+      error: "WOMPI_PUBLIC_KEY no configurada"
     });
   }
 
   res.json({
     publicKey: process.env.WOMPI_PUBLIC_KEY
   });
+
 });
 
 /* ======================================
-   SIGNATURE
+   WOMPI SIGNATURE
 ====================================== */
 
 app.get("/api/signature", (req, res) => {
+
   try {
+
     const reference = "ref_" + Date.now();
-    const amount = "200000"; // 2.000 COP en centavos
+    const amount = "200000";
     const currency = "COP";
 
     const integrityKey = process.env.WOMPI_INTEGRITY_KEY;
-
-    if (!integrityKey) {
-      return res.status(500).json({
-        error: "WOMPI_INTEGRITY_KEY no configurada"
-      });
-    }
 
     const stringToSign = reference + amount + currency + integrityKey;
 
@@ -74,116 +191,19 @@ app.get("/api/signature", (req, res) => {
     });
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Error generando firma" });
-  }
-});
 
-/* ======================================
-   WEBHOOK WOMPI
-====================================== */
+    console.error("ERROR SIGNATURE:", err);
 
-app.post("/api/wompi-webhook", async (req, res) => {
-  try {
-    const { event, data, signature, timestamp } = req.body;
-
-    if (!event || !data) {
-      return res.status(400).send("Invalid payload");
-    }
-
-    const transaction = data.transaction;
-
-    if (!transaction) {
-      return res.status(400).send("No transaction data");
-    }
-
-    const eventsSecret = process.env.WOMPI_EVENTS_SECRET;
-
-    if (!eventsSecret) {
-      console.error("❌ WOMPI_EVENTS_SECRET no definido");
-      return res.status(500).send("Server config error");
-    }
-
-    // 🔐 Validación firma webhook
-    const stringToSign =
-      transaction.id +
-      transaction.status +
-      transaction.amount_in_cents +
-      timestamp +
-      eventsSecret;
-
-    const hash = crypto
-      .createHash("sha256")
-      .update(stringToSign)
-      .digest("hex");
-
-    if (hash !== signature?.checksum) {
-      console.error("⚠️ Firma inválida");
-      return res.status(401).send("Invalid signature");
-    }
-
-    console.log("✅ Webhook válido recibido:", transaction.status);
-
-    // 💾 Guardar en base de datos
-    await pool.query(
-      `INSERT INTO transactions (wompi_id, email, amount, status)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (wompi_id)
-       DO UPDATE SET status = EXCLUDED.status`,
-      [
-        transaction.id,
-        transaction.customer_email,
-        transaction.amount_in_cents,
-        transaction.status
-      ]
-    );
-
-    res.status(200).send("OK");
-
-  } catch (error) {
-    console.error("❌ Error webhook:", error);
-    res.status(500).send("Internal Server Error");
-  }
-});
-
-/* ======================================
-   MIS CURSOS
-====================================== */
-
-app.get("/api/my-courses/:email", async (req, res) => {
-  try {
-    const { email } = req.params;
-
-    const result = await pool.query(
-      `SELECT wompi_id, amount, status, created_at
-       FROM transactions
-       WHERE email = $1
-       AND status = 'APPROVED'
-       ORDER BY created_at DESC`,
-      [email]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "No tienes cursos activos aún."
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      message: "¡Bienvenido a tus cursos!",
-      courses: result.rows
+    res.status(500).json({
+      error: "Error generando firma"
     });
 
-  } catch (error) {
-    console.error("❌ Error buscando cursos:", error);
-    res.status(500).json({ error: "Internal Server Error" });
   }
+
 });
 
 /* ======================================
-   START SERVER
+   SERVER
 ====================================== */
 
 const PORT = process.env.PORT || 8080;
