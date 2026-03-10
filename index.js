@@ -1,213 +1,305 @@
-require("dotenv").config();
+require("dotenv").config()
 
-const express = require("express");
-const cors = require("cors");
-const crypto = require("crypto");
-const jwt = require("jsonwebtoken");
-const bcrypt = require("bcryptjs");
-const pool = require("./db");
+const express = require("express")
+const cors = require("cors")
+const { Pool } = require("pg")
+const bcrypt = require("bcryptjs")
+const jwt = require("jsonwebtoken")
+const crypto = require("crypto")
 
-const app = express();
+const app = express()
 
-app.use(cors());
-app.use(express.json());
+app.use(cors({
+ origin:["http://localhost:3000"],
+ credentials:true
+}))
 
-/* ======================================
-   DEBUG VARIABLES
-====================================== */
+app.use(express.json())
 
-console.log("🔎 WOMPI_PUBLIC_KEY:", process.env.WOMPI_PUBLIC_KEY ? "OK" : "NO DEFINIDA");
-console.log("🔎 WOMPI_INTEGRITY_KEY:", process.env.WOMPI_INTEGRITY_KEY ? "OK" : "NO DEFINIDA");
-console.log("🔎 JWT_SECRET:", process.env.JWT_SECRET ? "OK" : "NO DEFINIDA");
+/* =========================
+DATABASE
+========================= */
 
-/* ======================================
-   JWT MIDDLEWARE
-====================================== */
+const pool = new Pool({
+ connectionString:process.env.DATABASE_URL,
+ ssl:{rejectUnauthorized:false}
+})
 
-function verifyToken(req, res, next) {
+pool.connect()
+.then(()=>console.log("🟢 PostgreSQL conectado"))
+.catch(err=>console.error("DB error",err))
 
-  const authHeader = req.headers["authorization"];
+/* =========================
+JWT MIDDLEWARE
+========================= */
 
-  if (!authHeader) {
-    return res.status(401).json({ error: "Token requerido" });
-  }
+function verifyToken(req,res,next){
 
-  const token = authHeader.split(" ")[1];
+ const authHeader=req.headers.authorization
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+ if(!authHeader){
+  return res.status(401).json({error:"Token requerido"})
+ }
 
-    if (err) {
-      return res.status(403).json({ error: "Token inválido" });
-    }
+ const token=authHeader.split(" ")[1]
 
-    req.user = decoded;
+ try{
 
-    next();
-  });
+  const decoded=jwt.verify(token,process.env.JWT_SECRET)
+
+  req.user=decoded
+
+  next()
+
+ }catch(err){
+
+  return res.status(401).json({error:"Token inválido"})
+
+ }
+
 }
 
-/* ======================================
-   ROOT
-====================================== */
+/* =========================
+LOGIN NORMAL
+========================= */
 
-app.get("/", (req, res) => {
-  res.json({ status: "Backend SoluPro funcionando 🚀" });
-});
+app.post("/api/login",async(req,res)=>{
 
-/* ======================================
-   LOGIN
-====================================== */
+ try{
 
-app.post("/api/login", async (req, res) => {
+  const {email,password}=req.body
 
-  try {
+  const result=await pool.query(
+   "SELECT * FROM users WHERE email=$1",
+   [email]
+  )
 
-    const { email, password } = req.body;
-
-    const result = await pool.query(
-      "SELECT * FROM users WHERE email = $1",
-      [email]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(401).json({ error: "Usuario no encontrado" });
-    }
-
-    const user = result.rows[0];
-
-    const validPassword = await bcrypt.compare(password, user.password);
-
-    if (!validPassword) {
-      return res.status(401).json({ error: "Password incorrecta" });
-    }
-
-    const token = jwt.sign(
-      {
-        userId: user.id,
-        email: user.email
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    res.json({
-      token,
-      user: {
-        id: user.id,
-        email: user.email
-      }
-    });
-
-  } catch (error) {
-
-    console.error("ERROR LOGIN:", error);
-
-    res.status(500).json({
-      error: "Error en login"
-    });
-
+  if(result.rows.length===0){
+   return res.status(401).json({error:"Credenciales inválidas"})
   }
 
-});
+  const user=result.rows[0]
 
-/* ======================================
-   MIS CURSOS
-====================================== */
+  const valid=await bcrypt.compare(password,user.password)
 
-app.get("/api/my-courses", verifyToken, async (req, res) => {
-
-  try {
-
-    const email = req.user.email;
-
-    console.log("EMAIL TOKEN:", email);
-
-    const result = await pool.query(
-      "SELECT * FROM enrollments WHERE email = $1",
-      [email]
-    );
-
-    res.json({
-      success: true,
-      courses: result.rows
-    });
-
-  } catch (error) {
-
-    console.error("ERROR /api/my-courses:", error);
-
-    res.status(500).json({
-      error: "Error obteniendo cursos"
-    });
-
+  if(!valid){
+   return res.status(401).json({error:"Credenciales inválidas"})
   }
 
-});
-
-/* ======================================
-   WOMPI PUBLIC KEY
-====================================== */
-
-app.get("/api/public-key", (req, res) => {
-
-  if (!process.env.WOMPI_PUBLIC_KEY) {
-    return res.status(500).json({
-      error: "WOMPI_PUBLIC_KEY no configurada"
-    });
-  }
+  const token=jwt.sign(
+   {userId:user.id,email:user.email},
+   process.env.JWT_SECRET,
+   {expiresIn:"7d"}
+  )
 
   res.json({
-    publicKey: process.env.WOMPI_PUBLIC_KEY
-  });
+   token,
+   user:{
+    id:user.id,
+    email:user.email
+   }
+  })
 
-});
+ }catch(err){
 
-/* ======================================
-   WOMPI SIGNATURE
-====================================== */
+  console.error(err)
+  res.status(500).json({error:"Login error"})
 
-app.get("/api/signature", (req, res) => {
+ }
 
-  try {
+})
 
-    const reference = "ref_" + Date.now();
-    const amount = "200000";
-    const currency = "COP";
+/* =========================
+AUTO LOGIN
+========================= */
 
-    const integrityKey = process.env.WOMPI_INTEGRITY_KEY;
+app.post("/api/auto-login",async(req,res)=>{
 
-    const stringToSign = reference + amount + currency + integrityKey;
+ try{
 
-    const signature = crypto
-      .createHash("sha256")
-      .update(stringToSign)
-      .digest("hex");
+  const {email}=req.body
 
-    res.json({
-      reference,
-      amount,
-      currency,
-      signature
-    });
+  const result=await pool.query(
+   "SELECT * FROM users WHERE email=$1",
+   [email]
+  )
 
-  } catch (err) {
+  if(result.rows.length===0){
+   return res.status(404).json({error:"Usuario no encontrado"})
+  }
 
-    console.error("ERROR SIGNATURE:", err);
+  const user=result.rows[0]
 
-    res.status(500).json({
-      error: "Error generando firma"
-    });
+  const token=jwt.sign(
+   {userId:user.id,email:user.email},
+   process.env.JWT_SECRET,
+   {expiresIn:"7d"}
+  )
+
+  res.json({
+   token,
+   user:{
+    id:user.id,
+    email:user.email
+   }
+  })
+
+ }catch(err){
+
+  console.error(err)
+  res.status(500).json({error:"Auto login error"})
+
+ }
+
+})
+
+/* =========================
+MIS CURSOS
+========================= */
+
+app.get("/api/my-courses",verifyToken,async(req,res)=>{
+
+ try{
+
+  const userId=req.user.userId
+
+  const result=await pool.query(
+   "SELECT course_id FROM enrollments WHERE user_id=$1",
+   [userId]
+  )
+
+  const courses=result.rows.map(r=>r.course_id)
+
+  res.json({
+   success:true,
+   courses
+  })
+
+ }catch(err){
+
+  console.error(err)
+  res.status(500).json({error:"Error obteniendo cursos"})
+
+ }
+
+})
+
+/* =========================
+WEBHOOK WOMPI
+========================= */
+
+app.post("/webhook/wompi",async(req,res)=>{
+
+ try{
+
+  const data=req.body.data
+
+  if(!data || !data.transaction){
+   return res.status(400).json({error:"Payload inválido"})
+  }
+
+  const tx=data.transaction
+
+  const {
+   id,
+   status,
+   amount_in_cents,
+   currency,
+   customer_email,
+   reference,
+   signature
+  }=tx
+
+  const integrityKey=process.env.WOMPI_INTEGRITY_KEY
+
+  const string=
+   id+
+   status+
+   amount_in_cents+
+   currency+
+   integrityKey
+
+  const hash=crypto
+   .createHash("sha256")
+   .update(string)
+   .digest("hex")
+
+  if(hash!==signature){
+   console.log("❌ Firma inválida")
+   return res.status(400).json({error:"Firma inválida"})
+  }
+
+  console.log("✅ Firma válida")
+
+  /* guardar transacción */
+
+  await pool.query(
+   "INSERT INTO transactions(wompi_id,email,amount,status) VALUES($1,$2,$3,$4)",
+   [id,customer_email,amount_in_cents,status]
+  )
+
+  if(status!=="APPROVED"){
+   return res.json({received:true})
+  }
+
+  const email=customer_email
+  const courseId=reference
+
+  let user=await pool.query(
+   "SELECT id FROM users WHERE email=$1",
+   [email]
+  )
+
+  let userId
+
+  if(user.rows.length===0){
+
+   const newUser=await pool.query(
+    "INSERT INTO users(email) VALUES($1) RETURNING id",
+    [email]
+   )
+
+   userId=newUser.rows[0].id
+
+  }else{
+
+   userId=user.rows[0].id
 
   }
 
-});
+  const exist=await pool.query(
+   "SELECT id FROM enrollments WHERE user_id=$1 AND course_id=$2",
+   [userId,courseId]
+  )
 
-/* ======================================
-   SERVER
-====================================== */
+  if(exist.rows.length===0){
 
-const PORT = process.env.PORT || 8080;
+   await pool.query(
+    "INSERT INTO enrollments(user_id,course_id) VALUES($1,$2)",
+    [userId,courseId]
+   )
 
-app.listen(PORT, () => {
-  console.log("🚀 Servidor corriendo en puerto", PORT);
-});
+   console.log("🎓 acceso concedido")
+
+  }
+
+  res.json({received:true})
+
+ }catch(err){
+
+  console.error(err)
+  res.status(500).json({error:"Webhook error"})
+
+ }
+
+})
+
+/* =========================
+SERVER
+========================= */
+
+const PORT=process.env.PORT || 8080
+
+app.listen(PORT,()=>{
+ console.log(`🚀 Servidor corriendo en puerto ${PORT}`)
+})
