@@ -19,7 +19,7 @@ const pool = new Pool({
 // HEALTH CHECK
 // ======================================
 app.get("/", (req, res) => {
-  res.send("SoluPro backend funcionando 🚀");
+  res.send("SoluPro backend funcionando 🚀 - Blindado contra mayúsculas");
 });
 
 // ======================================
@@ -30,7 +30,7 @@ app.post("/api/login", async (req, res) => {
   if (!email) return res.status(400).json({ error: "Email requerido" });
 
   const token = jwt.sign(
-    { email },
+    { email: email.toLowerCase() }, // Guardamos el email siempre en minúsculas
     process.env.JWT_SECRET || "dev_secret",
     { expiresIn: "7d" }
   );
@@ -42,7 +42,7 @@ app.post("/api/auto-login", async (req, res) => {
   if (!email) return res.status(400).json({ error: "Email requerido" });
 
   const token = jwt.sign(
-    { email },
+    { email: email.toLowerCase() }, // Guardamos el email siempre en minúsculas
     process.env.JWT_SECRET || "dev_secret",
     { expiresIn: "7d" }
   );
@@ -59,13 +59,15 @@ app.get("/api/my-courses", async (req, res) => {
 
     const token = authHeader.split(" ")[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET || "dev_secret");
-    const email = decoded.email;
+    
+    // Normalizamos el email del token a minúsculas
+    const email = decoded.email.toLowerCase();
 
     const result = await pool.query(
       `SELECT c.id, c.title
        FROM user_courses uc
        JOIN courses c ON c.id = uc.course_id
-       WHERE uc.email = $1`,
+       WHERE LOWER(uc.email) = $1`, // Comparamos en minúsculas en la DB
       [email]
     );
 
@@ -77,11 +79,11 @@ app.get("/api/my-courses", async (req, res) => {
 });
 
 // ======================================
-// RUTA SECRETA DE SETUP (LA PUERTA TRASERA)
+// RUTA DE SETUP (PARA LIMPIAR Y ASIGNAR)
 // ======================================
 app.get("/api/setup-db", async (req, res) => {
   try {
-    // 1. Crear tabla de cursos
+    // 1. Asegurar tabla de cursos
     await pool.query(`
       CREATE TABLE IF NOT EXISTS courses (
         id SERIAL PRIMARY KEY,
@@ -90,7 +92,7 @@ app.get("/api/setup-db", async (req, res) => {
       );
     `);
 
-    // 2. Crear tabla de usuarios_cursos
+    // 2. Asegurar tabla de user_courses
     await pool.query(`
       CREATE TABLE IF NOT EXISTS user_courses (
         id SERIAL PRIMARY KEY,
@@ -99,23 +101,23 @@ app.get("/api/setup-db", async (req, res) => {
       );
     `);
 
-    // 3. Crear el Bootcamp (forzamos el ID 1)
+    // 3. Crear el Bootcamp (ID 1)
     await pool.query(`
       INSERT INTO courses (id, title, description)
       VALUES (1, 'Bootcamp: Decisiones Inteligentes con Datos', 'Aprende a dominar los datos en tu negocio')
       ON CONFLICT (id) DO NOTHING;
     `);
 
-    // 4. Asignarte el curso a tu correo real
+    // 4. Asignar el curso a tu correo (siempre en minúsculas)
     await pool.query(`
       INSERT INTO user_courses (email, course_id)
       VALUES ('cpenpen90@gmail.com', 1);
     `);
 
-    res.send("<h1>✅ ¡Bóveda construida y curso asignado a cpenpen90@gmail.com!</h1><p>Ya puedes ir a tu localhost:3000/dashboard y recargar la página.</p>");
+    res.send("<h1>✅ Base de datos sincronizada</h1><p>Correo asignado: cpenpen90@gmail.com</p>");
   } catch (error) {
     console.error("Error en setup-db:", error);
-    res.status(500).send("Hubo un error: " + error.message);
+    res.status(500).send("Error: " + error.message);
   }
 });
 
