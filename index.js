@@ -1,29 +1,11 @@
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
-const { Pool } = require("pg");
 
 const app = express();
 
-
-// ===============================
-// MIDDLEWARE
-// ===============================
-
 app.use(cors());
 app.use(express.json());
-
-
-// ===============================
-// DATABASE POSTGRES
-// ===============================
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  }
-});
 
 
 // ===============================
@@ -31,17 +13,19 @@ const pool = new Pool({
 // ===============================
 
 app.get("/", (req, res) => {
-  res.send("SoluPro Backend running");
+  res.send("SoluPro backend funcionando 🚀");
 });
 
 
 // ===============================
-// LOGIN
+// AUTO LOGIN
 // ===============================
 
-app.post("/api/login", async (req, res) => {
+app.post("/api/auto-login", (req, res) => {
 
   try {
+
+    console.log("BODY RECIBIDO:", req.body);
 
     const { email } = req.body;
 
@@ -53,7 +37,7 @@ app.post("/api/login", async (req, res) => {
 
     const token = jwt.sign(
       { email },
-      process.env.JWT_SECRET || "dev_secret",
+      "dev_secret",
       { expiresIn: "7d" }
     );
 
@@ -64,104 +48,10 @@ app.post("/api/login", async (req, res) => {
 
   } catch (error) {
 
-    console.error("LOGIN ERROR:", error);
-
-    res.status(500).json({
-      error: "Error en login"
-    });
-
-  }
-
-});
-
-
-// ===============================
-// AUTO LOGIN DESPUES DE PAGO
-// ===============================
-
-app.post("/api/auto-login", async (req, res) => {
-
-  try {
-
-    console.log("AUTO LOGIN BODY:", req.body);
-
-    const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({
-        error: "Email requerido"
-      });
-    }
-
-    const token = jwt.sign(
-      { email: email.toLowerCase() },
-      process.env.JWT_SECRET || "dev_secret",
-      { expiresIn: "7d" }
-    );
-
-    res.json({
-      success: true,
-      token
-    });
-
-  } catch (error) {
-
-    console.error("AUTO LOGIN ERROR:", error);
+    console.error("ERROR AUTO LOGIN:", error);
 
     res.status(500).json({
       error: "Error interno auto login"
-    });
-
-  }
-
-});
-
-
-// ===============================
-// MIS CURSOS
-// ===============================
-
-app.get("/api/my-courses", async (req, res) => {
-
-  try {
-
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader) {
-      return res.status(401).json({
-        error: "Token requerido"
-      });
-    }
-
-    const token = authHeader.split(" ")[1];
-
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET || "dev_secret"
-    );
-
-    const email = decoded.email;
-
-    const result = await pool.query(
-      `
-      SELECT c.id, c.title
-      FROM user_courses uc
-      JOIN courses c ON c.id = uc.course_id
-      WHERE uc.email = $1
-      `,
-      [email]
-    );
-
-    res.json({
-      courses: result.rows
-    });
-
-  } catch (error) {
-
-    console.error("MY COURSES ERROR:", error);
-
-    res.status(500).json({
-      error: "Error obteniendo cursos"
     });
 
   }
@@ -176,5 +66,5 @@ app.get("/api/my-courses", async (req, res) => {
 const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, () => {
-  console.log("SoluPro backend running on port " + PORT);
+  console.log("Servidor SoluPro corriendo en puerto " + PORT);
 });
