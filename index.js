@@ -8,7 +8,7 @@ app.use(cors());
 app.use(express.json());
 
 // ======================================
-// CONEXIÓN A BASE DE DATOS (POSTGRES)
+// CONEXIÓN A BASE DE DATOS
 // ======================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -16,33 +16,31 @@ const pool = new Pool({
 });
 
 // ======================================
-// HEALTH CHECK
+// RUTAS BÁSICAS
 // ======================================
 app.get("/", (req, res) => {
-  res.send("SoluPro backend funcionando 🚀 - Blindado contra mayúsculas");
+  res.send("SoluPro backend funcionando 🚀 - Modo Diagnóstico Activo");
 });
 
-// ======================================
-// RUTAS DE ACCESO (LOGIN & AUTO-LOGIN)
-// ======================================
-app.post("/api/login", async (req, res) => {
+// LOGIN / AUTO-LOGIN (Normalizando a minúsculas)
+app.post("/api/login", (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: "Email requerido" });
-
+  
   const token = jwt.sign(
-    { email: email.toLowerCase() }, // Guardamos el email siempre en minúsculas
+    { email: email.toLowerCase().trim() }, 
     process.env.JWT_SECRET || "dev_secret",
     { expiresIn: "7d" }
   );
   res.json({ success: true, token });
 });
 
-app.post("/api/auto-login", async (req, res) => {
+app.post("/api/auto-login", (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: "Email requerido" });
-
+  
   const token = jwt.sign(
-    { email: email.toLowerCase() }, // Guardamos el email siempre en minúsculas
+    { email: email.toLowerCase().trim() }, 
     process.env.JWT_SECRET || "dev_secret",
     { expiresIn: "7d" }
   );
@@ -50,7 +48,7 @@ app.post("/api/auto-login", async (req, res) => {
 });
 
 // ======================================
-// OBTENER MIS CURSOS (DASHBOARD)
+// OBTENER CURSOS (CON FILTRO DE SEGURIDAD)
 // ======================================
 app.get("/api/my-courses", async (req, res) => {
   try {
@@ -59,15 +57,14 @@ app.get("/api/my-courses", async (req, res) => {
 
     const token = authHeader.split(" ")[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET || "dev_secret");
-    
-    // Normalizamos el email del token a minúsculas
-    const email = decoded.email.toLowerCase();
+    const email = decoded.email.toLowerCase().trim();
 
+    // Query optimizada: Busca por email y trae la info del curso
     const result = await pool.query(
-      `SELECT c.id, c.title
+      `SELECT c.id, c.title, c.description
        FROM user_courses uc
        JOIN courses c ON c.id = uc.course_id
-       WHERE LOWER(uc.email) = $1`, // Comparamos en minúsculas en la DB
+       WHERE LOWER(uc.email) = $1`,
       [email]
     );
 
@@ -79,45 +76,28 @@ app.get("/api/my-courses", async (req, res) => {
 });
 
 // ======================================
-// RUTA DE SETUP (PARA LIMPIAR Y ASIGNAR)
+// 🔍 ENDPOINT DE DIAGNÓSTICO (OPCIÓN C)
 // ======================================
-app.get("/api/setup-db", async (req, res) => {
+app.get("/api/check-db/:email", async (req, res) => {
+  const emailABuscar = req.params.email.toLowerCase().trim();
   try {
-    // 1. Asegurar tabla de cursos
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS courses (
-        id SERIAL PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT
-      );
-    `);
+    const courses = await pool.query("SELECT * FROM courses");
+    const userAccess = await pool.query(
+      "SELECT * FROM user_courses WHERE LOWER(email) = $1", 
+      [emailABuscar]
+    );
+    const allUserCourses = await pool.query("SELECT * FROM user_courses");
 
-    // 2. Asegurar tabla de user_courses
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_courses (
-        id SERIAL PRIMARY KEY,
-        email TEXT NOT NULL,
-        course_id INT
-      );
-    `);
-
-    // 3. Crear el Bootcamp (ID 1)
-    await pool.query(`
-      INSERT INTO courses (id, title, description)
-      VALUES (1, 'Bootcamp: Decisiones Inteligentes con Datos', 'Aprende a dominar los datos en tu negocio')
-      ON CONFLICT (id) DO NOTHING;
-    `);
-
-    // 4. Asignar el curso a tu correo (siempre en minúsculas)
-    await pool.query(`
-      INSERT INTO user_courses (email, course_id)
-      VALUES ('cpenpen90@gmail.com', 1);
-    `);
-
-    res.send("<h1>✅ Base de datos sincronizada</h1><p>Correo asignado: cpenpen90@gmail.com</p>");
-  } catch (error) {
-    console.error("Error en setup-db:", error);
-    res.status(500).send("Error: " + error.message);
+    res.json({
+      status: "Diagnóstico Ejecutado",
+      buscando_email: emailABuscar,
+      tabla_courses: courses.rows,
+      tu_acceso_especifico: userAccess.rows,
+      toda_la_tabla_user_courses: allUserCourses.rows,
+      nota: "Si 'tu_acceso_especifico' está vacío pero 'toda_la_tabla' tiene datos, hay un error de tipeo en el email."
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -126,5 +106,5 @@ app.get("/api/setup-db", async (req, res) => {
 // ======================================
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log("Servidor SoluPro corriendo en puerto " + PORT);
+  console.log(`Servidor en puerto ${PORT}`);
 });
