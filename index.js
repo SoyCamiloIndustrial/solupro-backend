@@ -4,7 +4,18 @@ const jwt = require("jsonwebtoken");
 const { Pool } = require("pg");
 
 const app = express();
-app.use(cors());
+
+// ── CORS estricto ─────────────────────────────────────────────────────────
+const corsOptions = {
+  origin: [
+    "https://solupro-frontend.vercel.app", // producción
+    "http://localhost:3000"                 // desarrollo local
+  ],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // ── Base de datos ─────────────────────────────────────────────────────────
@@ -15,7 +26,7 @@ const pool = new Pool({
 
 // ── Health check ──────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
-  res.send("SoluPro Backend: ¡Conexión con user_courses establecida! 🚀");
+  res.send("SoluPro Backend v1.0 — Producción 🚀");
 });
 
 // ── LOGIN ─────────────────────────────────────────────────────────────────
