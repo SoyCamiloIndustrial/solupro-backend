@@ -26,16 +26,19 @@ app.get("/", (req, res) => {
   res.send("SoluPro Backend v1.1 — Online y listo para el Beef 🥩");
 });
 
-// ── CURRICULUM (El motor del panel) ──────────────────────────────
+// ── CURRICULUM (El motor del panel - BLINDADO) ───────────────────
 app.get("/api/curriculum/:courseId", async (req, res) => {
-  const { courseId } = req.params;
+  // Ya no filtramos por course_id porque vimos que la tabla no lo tiene.
+  // Traemos los videos directamente y los ordenamos por ID.
   try {
     const result = await pool.query(
-      `SELECT id, title, video_url, order_index 
+      `SELECT 
+         id, 
+         title, 
+         bunny_video_id AS video_url, 
+         id AS order_index 
        FROM lessons 
-       WHERE course_id = $1 
-       ORDER BY order_index ASC`,
-      [courseId]
+       ORDER BY id ASC`
     );
     res.json(result.rows);
   } catch (err) {
