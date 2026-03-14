@@ -5,12 +5,9 @@ const { Pool } = require("pg");
 
 const app = express();
 
-// ── CORS estricto ─────────────────────────────────────────────────────────
+// ── CORS Configurado (Abierto para evitar bloqueos) ──────────────
 const corsOptions = {
-  origin: [
-    "https://solupro-frontend.vercel.app", // producción
-    "http://localhost:3000"                // desarrollo local
-  ],
+  origin: "*", 
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"]
 };
@@ -18,18 +15,18 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// ── Base de datos ─────────────────────────────────────────────────────────
+// ── Base de datos ────────────────────────────────────────────────
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-// ── Health check ──────────────────────────────────────────────────────────
+// ── Health check ─────────────────────────────────────────────────
 app.get("/", (req, res) => {
-  res.send("SoluPro Backend v1.1 — Búnker de Excel Activo 🥩🚀");
+  res.send("SoluPro Backend v1.1 — Online y listo para el Beef 🥩");
 });
 
-// ── CURRICULUM (Obtener lecciones de un curso) ───────────────────────────
+// ── CURRICULUM (El motor del panel) ──────────────────────────────
 app.get("/api/curriculum/:courseId", async (req, res) => {
   const { courseId } = req.params;
   try {
@@ -42,16 +39,15 @@ app.get("/api/curriculum/:courseId", async (req, res) => {
     );
     res.json(result.rows);
   } catch (err) {
-    console.error("Error obteniendo curriculum:", err);
-    res.status(500).json({ error: "Error al obtener el contenido del curso" });
+    console.error("Error en curriculum:", err);
+    res.status(500).json({ error: "No pudimos traer las lecciones" });
   }
 });
 
-// ── LOGIN ─────────────────────────────────────────────────────────────────
+// ── LOGIN & AUTO-LOGIN ───────────────────────────────────────────
 app.post("/api/login", (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: "Email requerido" });
-
   const token = jwt.sign(
     { email: email.toLowerCase().trim() },
     process.env.JWT_SECRET || "dev_secret",
@@ -60,11 +56,9 @@ app.post("/api/login", (req, res) => {
   res.json({ success: true, token });
 });
 
-// ── AUTO-LOGIN (llamado por /success después del pago) ────────────────────
 app.post("/api/auto-login", (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: "Email requerido" });
-
   const token = jwt.sign(
     { email: email.toLowerCase().trim() },
     process.env.JWT_SECRET || "dev_secret",
@@ -73,12 +67,11 @@ app.post("/api/auto-login", (req, res) => {
   res.json({ success: true, token });
 });
 
-// ── MIS CURSOS (lee email del JWT) ────────────────────────────────────────
+// ── MIS CURSOS ───────────────────────────────────────────────────
 app.get("/api/my-courses", async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader) return res.status(401).json({ error: "Token requerido" });
-
     const token = authHeader.split(" ")[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET || "dev_secret");
     const email = decoded.email.toLowerCase().trim();
@@ -90,16 +83,14 @@ app.get("/api/my-courses", async (req, res) => {
        WHERE LOWER(uc.email) = $1`,
       [email]
     );
-
     res.json({ success: true, courses: result.rows });
-
   } catch (error) {
     console.error("Error en my-courses:", error);
     res.status(500).json({ error: "Error en el servidor" });
   }
 });
 
-// ── DIAGNÓSTICO ───────────────────────────────────────────────────────────
+// ── DIAGNÓSTICO ──────────────────────────────────────────────────
 app.get("/api/check-db/:email", async (req, res) => {
   try {
     const userAccess = await pool.query(
@@ -112,6 +103,6 @@ app.get("/api/check-db/:email", async (req, res) => {
   }
 });
 
-// ── Servidor ──────────────────────────────────────────────────────────────
+// ── Servidor ─────────────────────────────────────────────────────
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Servidor SoluPro en puerto ${PORT}`));cd sol
+app.listen(PORT, () => console.log(`🚀 Búnker API corriendo en puerto ${PORT}`));
