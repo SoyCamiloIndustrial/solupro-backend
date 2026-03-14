@@ -9,7 +9,7 @@ const app = express();
 const corsOptions = {
   origin: [
     "https://solupro-frontend.vercel.app", // producción
-    "http://localhost:3000"                 // desarrollo local
+    "http://localhost:3000"                // desarrollo local
   ],
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"]
@@ -26,7 +26,25 @@ const pool = new Pool({
 
 // ── Health check ──────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
-  res.send("SoluPro Backend v1.0 — Producción 🚀");
+  res.send("SoluPro Backend v1.1 — Búnker de Excel Activo 🥩🚀");
+});
+
+// ── CURRICULUM (Obtener lecciones de un curso) ───────────────────────────
+app.get("/api/curriculum/:courseId", async (req, res) => {
+  const { courseId } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT id, title, video_url, order_index 
+       FROM lessons 
+       WHERE course_id = $1 
+       ORDER BY order_index ASC`,
+      [courseId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Error obteniendo curriculum:", err);
+    res.status(500).json({ error: "Error al obtener el contenido del curso" });
+  }
 });
 
 // ── LOGIN ─────────────────────────────────────────────────────────────────
@@ -96,4 +114,4 @@ app.get("/api/check-db/:email", async (req, res) => {
 
 // ── Servidor ──────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Servidor en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor SoluPro en puerto ${PORT}`));cd sol
