@@ -92,12 +92,12 @@ app.post('/api/login', async (req, res) => {
     const user = result.rows[0];
 
     // Si el usuario tiene contraseña, la verificamos
-    if (user.password_hash && password) {
-      const validPassword = await bcrypt.compare(password, user.password_hash);
+    if (user.password && password) {
+      const validPassword = await bcrypt.compare(password, user.password);
       if (!validPassword) {
         return res.status(401).json({ error: "Credenciales inválidas." });
       }
-    } else if (!user.password_hash) {
+    } else if (!user.password) {
        // Si no tiene contraseña (caso extremo), lo rechazamos y pedimos que recupere clave
        return res.status(401).json({ error: "Por favor, usa la opción 'Olvidé mi contraseña' para crear una clave de acceso." });
     }
@@ -174,21 +174,21 @@ app.post("/api/webhook", async (req, res) => {
 
     // ── 2. Crear usuario o actualizar si no tiene contraseña ──────────
     const userCheck = await pool.query(
-      `SELECT id, password_hash FROM users WHERE email = $1`,
+      `SELECT id, password FROM users WHERE email = $1`,
       [email]
     );
 
     if (userCheck.rows.length === 0) {
       // Usuario nuevo
       await pool.query(
-        `INSERT INTO users (email, password_hash) VALUES ($1, $2)`,
+        `INSERT INTO users (email, password) VALUES ($1, $2)`,
         [email, passwordHash]
       );
       console.log(`✅ Usuario creado: ${email}`);
-    } else if (!userCheck.rows[0].password_hash) {
+    } else if (!userCheck.rows[0].password) {
       // Usuario existe pero venía con NULL (Compras antiguas)
       await pool.query(
-        `UPDATE users SET password_hash = $1 WHERE email = $2`,
+        `UPDATE users SET password = $1 WHERE email = $2`,
         [passwordHash, email]
       );
       console.log(`✅ Contraseña asignada a usuario antiguo: ${email}`);
@@ -213,8 +213,7 @@ app.post("/api/webhook", async (req, res) => {
     // ── 5. Email de bienvenida con Resend ─────────────────────────────
     try {
       // Importante: Solo enviamos correo si se generó la contraseña ahorita
-      // Si el usuario ya tenía contraseña de antes, no se la sobreescribimos.
-      if (userCheck.rows.length === 0 || !userCheck.rows[0].password_hash) {
+      if (userCheck.rows.length === 0 || !userCheck.rows[0].password) {
         await resend.emails.send({
           from: "SoluPro <onboarding@resend.dev>", // Cambia esto cuando tengas dominio oficial
           to: email,
