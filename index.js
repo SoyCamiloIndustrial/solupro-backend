@@ -4,16 +4,16 @@ const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
-const { Resend } = require('resend'); // Importamos Resend
+const { Resend } = require('resend');
 
 const app = express();
-const resend = new Resend(process.env.RESEND_API_KEY); // Inicializamos con tu API KEY
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-// ── CORS Actualizado para incluir tu nuevo dominio ─────────────────────────
+// ── CORS: Permite tu nuevo dominio y el de Vercel ──────────────────────────
 app.use(cors({
   origin: [
     "https://solupro-frontend.vercel.app",
-    "https://academia-solupro.com", // Tu nuevo dominio
+    "https://academia-solupro.com",
     "http://localhost:3000"
   ],
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -22,20 +22,22 @@ app.use(cors({
 
 app.use(express.json());
 
+// ── Conexión a Base de Datos ──────────────────────────────────────────────
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
+// ── Health Check ──────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
-  res.send("Academia SoluPro Backend v7.0 🚀");
+  res.send("Academia SoluPro API v7.3 🚀");
 });
 
-// ── LOGIN ─────────────────────────────────────────────────────────────────
+// ── LOGIN ESTÁNDAR ────────────────────────────────────────────────────────
 app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: "Email y password requeridos" });
+    if (!email || !password) return res.status(400).json({ error: "Faltan datos" });
 
     const result = await pool.query(
       `SELECT * FROM users WHERE LOWER(email) = $1`,
@@ -45,16 +47,7 @@ app.post("/api/login", async (req, res) => {
     if (result.rows.length === 0) return res.status(401).json({ error: "Usuario no encontrado" });
 
     const user = result.rows[0];
-    const dbHash = user.password_hash || user.password; // Soporta ambas columnas por seguridad
-
-    if (!dbHash) {
-        // Si el usuario existe pero no tiene hash, lo creamos con el pass actual (auto-reparación)
-        const newHash = await bcrypt.hash(password, 10);
-        await pool.query(`UPDATE users SET password_hash = $1 WHERE email = $2`, [newHash, user.email]);
-        return res.json({ success: true, token: jwt.sign({ email: user.email }, process.env.JWT_SECRET || "dev_secret", { expiresIn: "7d" }) });
-    }
-
-    const valid = await bcrypt.compare(password, dbHash);
+    const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: "Contraseña incorrecta" });
 
     const token = jwt.sign(
@@ -65,12 +58,27 @@ app.post("/api/login", async (req, res) => {
 
     res.json({ success: true, token });
   } catch (error) {
-    res.status(500).json({ error: "Error en el servidor" });
+    console.error("Error login:", error);
+    res.status(500).json({ error: "Error interno" });
   }
 });
 
-// ── WEBHOOK WOMPI + ENVÍO DE CORREO PROFESIONAL ───────────────────────────
+// ── AUTO-LOGIN (Post-pago) ────────────────────────────────────────────────
+app.post("/api/auto-login", (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: "Email requerido" });
+
+  const token = jwt.sign(
+    { email: email.toLowerCase().trim() },
+    process.env.JWT_SECRET || "dev_secret",
+    { expiresIn: "7d" }
+  );
+  res.json({ success: true, token });
+});
+
+// ── WEBHOOK WOMPI: Lógica "Resistente a Balas" ────────────────────────────
 app.post("/api/webhook", async (req, res) => {
+  // 1. Responder a Wompi de inmediato para evitar bloqueos
   res.sendStatus(200);
 
   try {
@@ -81,56 +89,115 @@ app.post("/api/webhook", async (req, res) => {
     if (!transaction || transaction.status !== "APPROVED") return;
 
     const email = transaction.customer_email?.toLowerCase().trim();
-    const courseId = 2; // Excel Básico
+    const reference = transaction.reference;
+    const amount = transaction.amount_in_cents;
+    const courseId = 2; // ID del curso de Excel
 
     if (!email) return;
 
-    // Generar contraseña temporal
+    // Generar credenciales
     const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
     const tempPassword = "SoluPro-" + Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
     const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-    // Crear o actualizar usuario
+    console.log(`⏳ Procesando acceso para: ${email}...`);
+
+    // 2. Operaciones de Base de Datos (Síncronas y prioritarias)
+    // Crear/Actualizar Usuario
     await pool.query(
       `INSERT INTO users (email, password_hash) VALUES ($1, $2) 
        ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash WHERE users.password_hash IS NULL`,
       [email, passwordHash]
     );
 
-    // Asignar curso
-    await pool.query(`INSERT INTO user_courses (email, course_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [email, courseId]);
+    // Asignar Curso
+    await pool.query(
+      `INSERT INTO user_courses (email, course_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [email, courseId]
+    );
 
-    // ENVÍO DE CORREO CON RESEND USANDO TU NUEVO DOMINIO
-    await resend.emails.send({
-      from: 'Academia SoluPro <hola@academia-solupro.com>',
+    // Registrar Transacción (Usando la columna 'reference' que arreglamos)
+    await pool.query(
+      `INSERT INTO transactions (email, reference, status, amount, created_at)
+       VALUES ($1, $2, $3, $4, NOW()) ON CONFLICT DO NOTHING`,
+      [email, reference, transaction.status, amount]
+    );
+
+    console.log(`✅ Acceso concedido en DB para ${email}`);
+
+    // 3. Enviar Correo en segundo plano (No bloquea el flujo principal)
+    resend.emails.send({
+      from: 'Academia SoluPro <hola@send.academia-solupro.com>',
       to: email,
       subject: '🚀 ¡Bienvenido a la Academia SoluPro!',
       html: `
-        <div style="font-family: sans-serif; color: #333;">
-          <h2>¡Felicidades, ya tienes acceso!</h2>
-          <p>Tu pago ha sido procesado con éxito y ya puedes comenzar el curso de <strong>Excel Básico</strong>.</p>
-          <p>Tus credenciales de acceso son:</p>
-          <ul>
-            <li><strong>Email:</strong> ${email}</li>
-            <li><strong>Contraseña temporal:</strong> ${tempPassword}</li>
-          </ul>
-          <p>Ingresa aquí: <a href="https://academia-solupro.com/login">Acceder a mi curso</a></p>
+        <div style="font-family: sans-serif; max-width: 600px; border: 1px solid #eee; padding: 20px;">
+          <h2 style="color: #10b981;">¡Felicidades, ya tienes acceso!</h2>
+          <p>Tu pago ha sido procesado con éxito. Ya puedes comenzar el curso de <strong>Excel Básico</strong>.</p>
+          <hr>
+          <p><strong>Tus credenciales de acceso:</strong></p>
+          <p><strong>Email:</strong> ${email}</p>
+          <p><strong>Contraseña temporal:</strong> ${tempPassword}</p>
           <br>
-          <p>¡Nos vemos adentro!</p>
+          <a href="https://academia-solupro.com/login" style="background: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Entrar a la Academia</a>
         </div>
       `
+    }).then(() => {
+      console.log(`📧 Correo de bienvenida enviado a ${email}`);
+    }).catch(err => {
+      console.error(`❌ Error al enviar correo a ${email}:`, err.message);
     });
 
-    console.log(`✅ Pago exitoso y correo enviado a: ${email}`);
-
   } catch (error) {
-    console.error("❌ Error en webhook:", error);
+    console.error("❌ Error crítico en el Webhook:", error);
   }
 });
 
-// Mantener las demás rutas de Claude (my-courses, curriculum, etc.) tal cual...
-app.get("/api/my-courses", async (req, res) => { /* Código original de Claude */ });
-app.get("/api/curriculum/:courseId", async (req, res) => { /* Código original de Claude */ });
+// ── MIS CURSOS ────────────────────────────────────────────────────────────
+app.get("/api/my-courses", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: "No autorizado" });
 
+    const token = authHeader.split(" ")[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || "dev_secret");
+    const email = decoded.email.toLowerCase().trim();
+
+    const result = await pool.query(
+      `SELECT c.id, c.title, c.description
+       FROM user_courses uc
+       JOIN courses c ON c.id = uc.course_id
+       WHERE LOWER(uc.email) = $1`,
+      [email]
+    );
+
+    res.json({ success: true, courses: result.rows });
+  } catch (error) {
+    res.status(401).json({ error: "Token inválido" });
+  }
+});
+
+// ── CURRICULUM ────────────────────────────────────────────────────────────
+app.get("/api/curriculum/:courseId", async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    
+    // Obtener lecciones directamente (ajustado a order_num)
+    const result = await pool.query(
+      `SELECT id, title, bunny_video_id, order_num 
+       FROM lessons WHERE course_id = $1 ORDER BY order_num ASC`,
+      [courseId]
+    );
+
+    res.json({ success: true, lessons: result.rows });
+  } catch (error) {
+    console.error("Error curriculum:", error);
+    res.status(500).json({ error: "Error al cargar lecciones" });
+  }
+});
+
+// ── Servidor ──────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`🚀 Academia SoluPro v7.0 en puerto ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor SoluPro v7.3 listo en puerto ${PORT}`);
+});
