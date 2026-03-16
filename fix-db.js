@@ -1,3 +1,14 @@
+/**
+ * fix-db.js — Script de migración segura para SoluPro v7.11
+ *
+ * Uso:
+ *   node fix-db.js
+ *
+ * Requiere la variable de entorno DATABASE_URL (igual que el servidor).
+ * Usa ADD COLUMN IF NOT EXISTS para que sea seguro correrlo múltiples veces
+ * sin riesgo de borrar datos existentes.
+ */
+
 require('dotenv').config();
 const { Pool } = require('pg');
 
@@ -6,75 +17,62 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-async function fix() {
+async function migrate() {
+  const client = await pool.connect();
+
   try {
-    console.log("⏳ Reconstruyendo base de datos de SoluPro...");
+    console.log('🔌 Conectado a la base de datos. Iniciando migración...\n');
 
-    // 1. Usuarios: Aseguramos columna 'password_hash'
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        email TEXT UNIQUE NOT NULL,
-        password_hash TEXT,
-        created_at TIMESTAMP DEFAULT NOW()
-      );
+    await client.query('BEGIN');
+
+    // ── TABLA: users ──────────────────────────────────────────────────────
+    // FIX #3a: Asegura que password_hash exista
+    await client.query(`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS password_hash TEXT;
     `);
+    console.log('✅ users.password_hash — OK');
 
-    // 2. Cursos
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS courses (
-        id SERIAL PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT
-      );
+    // ── TABLA: transactions ───────────────────────────────────────────────
+    // FIX #3b: Asegura que reference, status y amount existan
+    await client.query(`
+      ALTER TABLE transactions
+        ADD COLUMN IF NOT EXISTS reference  TEXT,
+        ADD COLUMN IF NOT EXISTS status     TEXT,
+        ADD COLUMN IF NOT EXISTS amount     BIGINT;
     `);
+    console.log('✅ transactions.reference / status / amount — OK');
 
-    // 3. Inscripciones (user_courses)
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_courses (
-        id SERIAL PRIMARY KEY,
-        email TEXT NOT NULL,
-        course_id INTEGER,
-        UNIQUE(email, course_id)
-      );
+    // ── TABLA: lessons ────────────────────────────────────────────────────
+    // Garantiza que las columnas usadas en el endpoint de curriculum existan.
+    // course_id, bunny_video_id y order_num deben estar presentes.
+    await client.query(`
+      ALTER TABLE lessons
+        ADD COLUMN IF NOT EXISTS course_id      INTEGER,
+        ADD COLUMN IF NOT EXISTS bunny_video_id TEXT,
+        ADD COLUMN IF NOT EXISTS order_num      INTEGER;
     `);
+    console.log('✅ lessons.course_id / bunny_video_id / order_num — OK');
 
-    // 4. Transacciones: Aseguramos columna 'reference' (¡CRÍTICO!)
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS transactions (
-        id SERIAL PRIMARY KEY,
-        email TEXT NOT NULL,
-        reference TEXT UNIQUE,
-        status TEXT,
-        amount INTEGER,
-        created_at TIMESTAMP DEFAULT NOW()
-      );
+    // ── ÍNDICE OPCIONAL: mejora el rendimiento del filtro por course_id ───
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_lessons_course_id ON lessons (course_id);
     `);
+    console.log('✅ Índice idx_lessons_course_id — OK');
 
-    // 5. Lecciones: Aseguramos 'order_num' y 'bunny_video_id'
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS lessons (
-        id SERIAL PRIMARY KEY,
-        course_id INTEGER,
-        title TEXT NOT NULL,
-        bunny_video_id TEXT,
-        order_num INTEGER
-      );
-    `);
+    await client.query('COMMIT');
 
-    // 6. Insertar el curso de Excel (ID 2)
-    await pool.query(`
-      INSERT INTO courses (id, title, description) 
-      VALUES (2, 'Excel Básico para Negocios', 'Curso completo desde cero')
-      ON CONFLICT (id) DO NOTHING;
-    `);
+    console.log('\n🎉 Migración completada sin errores. Cero datos borrados.');
 
-    console.log("✅ ¡Base de datos blindada y lista!");
-  } catch (err) {
-    console.error("❌ Error:", err.message);
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('\n❌ Error durante la migración. Se hizo ROLLBACK completo.');
+    console.error('   Detalle:', error.message);
+    process.exit(1);
   } finally {
+    client.release();
     await pool.end();
   }
 }
 
-fix();
+migrate();
