@@ -50,7 +50,7 @@ app.get('/api/curriculum/:courseId', async (req, res) => {
   try {
     const { courseId } = req.params;
     const result = await pool.query(
-      'SELECT id, title, bunny_video_id as video_url, order_index FROM lessons WHERE course_id = $1 ORDER BY order_index ASC',
+      'SELECT id, title, bunny_video_id as video_url, order_num FROM lessons WHERE course_id = $1 ORDER BY order_num ASC',
       [courseId]
     );
     res.json(result.rows);
@@ -98,7 +98,7 @@ app.post('/api/login', async (req, res) => {
         return res.status(401).json({ error: "Credenciales inválidas." });
       }
     } else if (!user.password) {
-       // Si no tiene contraseña (caso extremo), lo rechazamos y pedimos que recupere clave
+       // Si no tiene contraseña, lo rechazamos y pedimos que recupere clave
        return res.status(401).json({ error: "Por favor, usa la opción 'Olvidé mi contraseña' para crear una clave de acceso." });
     }
 
@@ -204,7 +204,7 @@ app.post("/api/webhook", async (req, res) => {
 
     // ── 4. Guardar Log de la transacción ──────────────────────────────
     await pool.query(
-      `INSERT INTO transactions (email, reference, status, amount, created_at)
+      `INSERT INTO transactions (email, wompi_id, status, amount, created_at)
        VALUES ($1, $2, $3, $4, NOW())
        ON CONFLICT DO NOTHING`,
       [email, transaction.reference, transaction.status, transaction.amount_in_cents]
