@@ -16,24 +16,37 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Función para asegurar que las tablas existan con el nombre correcto
-const inicializarDB = async () => {
+// Asegura que la base de datos tenga lo necesario
+const prepararTablas = async () => {
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, email VARCHAR(255) UNIQUE NOT NULL, password VARCHAR(255) NOT NULL);
-    CREATE TABLE IF NOT EXISTS lessons (id SERIAL PRIMARY KEY, title VARCHAR(255) NOT NULL, bunny_video_id VARCHAR(255) NOT NULL, order_num INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY, 
+      email VARCHAR(255) UNIQUE NOT NULL, 
+      password TEXT, 
+      password_hash TEXT
+    );
+    CREATE TABLE IF NOT EXISTS lessons (
+      id SERIAL PRIMARY KEY, 
+      title VARCHAR(255) NOT NULL, 
+      bunny_video_id VARCHAR(255) NOT NULL, 
+      order_num INTEGER NOT NULL
+    );
   `);
 };
 
-app.get('/', (req, res) => res.send('SoluPro Backend Vivo ✅'));
+app.get('/', (req, res) => res.send('SoluPro Backend v4.5 Vivo ✅'));
 
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
   try {
-    await inicializarDB();
+    await prepararTablas();
     const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     const user = result.rows[0];
-    // Usamos .password (nombre correcto en tu BD)
-    if (user && await bcrypt.compare(password, user.password)) {
+    
+    // Verifica contra 'password' o 'password_hash' para evitar errores de columna
+    const dbPass = user.password_hash || user.password;
+    
+    if (user && await bcrypt.compare(password, dbPass)) {
       const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET || 'secret123', { expiresIn: '24h' });
       return res.json({ token });
     }
@@ -59,17 +72,16 @@ app.post('/webhook-wompi', async (req, res) => {
         const tempPass = Math.random().toString(36).slice(-8);
         const hash = await bcrypt.hash(tempPass, 10);
         try {
-            await inicializarDB();
-            // CORRECCIÓN: Usamos 'password' para que coincida con tu BD
+            await prepararTablas();
             await pool.query(
-                'INSERT INTO users (email, password) VALUES ($1, $2) ON CONFLICT (email) DO UPDATE SET password = $2',
+                'INSERT INTO users (email, password_hash) VALUES ($1, $2) ON CONFLICT (email) DO UPDATE SET password_hash = $2',
                 [email, hash]
             );
             await resend.emails.send({
                 from: 'SoluPro <onboarding@resend.dev>',
                 to: email,
-                subject: 'Acceso a SoluPro Excel',
-                html: `<p>Bienvenido. Tu contraseña es: <strong>${tempPass}</strong></p>`
+                subject: 'Acceso a tu curso',
+                html: `<p>Contraseña: <strong>${tempPass}</strong></p>`
             });
             res.status(200).send('OK');
         } catch (e) { res.status(500).send('Error'); }
@@ -77,4 +89,4 @@ app.post('/webhook-wompi', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`🚀 SoluPro Backend v4.0 en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Servidor listo en puerto ${PORT}`));
