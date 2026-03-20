@@ -6,10 +6,11 @@ const router     = express.Router();
 const resend     = new Resend(process.env.RESEND_API_KEY);
 
 router.post('/webhook', async (req, res) => {
-  res.sendStatus(200);
+  res.sendStatus(200); // Le respondemos rápido a Wompi para que no reintente
   try {
     const { event, data } = req.body;
     if (event !== 'transaction.updated') return;
+    
     const transaction = data?.transaction;
     if (!transaction || transaction.status !== 'APPROVED') return;
 
@@ -26,21 +27,41 @@ router.post('/webhook', async (req, res) => {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      await client.query(
-        `INSERT INTO users (email, password_hash) VALUES ($1, $2)
-         ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash
-         WHERE users.password_hash IS NULL`,
-        [email, passwordHash]
-      );
-      await client.query(
-        'INSERT INTO user_courses (email, course_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-        [email, courseId]
-      );
-      await client.query(
-        `INSERT INTO transactions (email, reference, status, amount)
-         VALUES ($1, $2, 'APPROVED', $3) ON CONFLICT DO NOTHING`,
-        [email, reference, amount]
-      );
+
+      // 1. GUARDAR USUARIO (Sin usar ON CONFLICT)
+      const userCheck = await client.query('SELECT email, password_hash FROM users WHERE email = $1', [email]);
+      if (userCheck.rows.length === 0) {
+        // Si no existe, lo creamos
+        await client.query(
+          'INSERT INTO users (email, password_hash) VALUES ($1, $2)',
+          [email, passwordHash]
+        );
+      } else if (!userCheck.rows[0].password_hash) {
+        // Si existe pero no tiene contraseña, se la actualizamos
+        await client.query(
+          'UPDATE users SET password_hash = $2 WHERE email = $1',
+          [email, passwordHash]
+        );
+      }
+
+      // 2. ASIGNAR CURSO (Sin usar ON CONFLICT)
+      const courseCheck = await client.query('SELECT 1 FROM user_courses WHERE email = $1 AND course_id = $2', [email, courseId]);
+      if (courseCheck.rows.length === 0) {
+        await client.query(
+          'INSERT INTO user_courses (email, course_id) VALUES ($1, $2)',
+          [email, courseId]
+        );
+      }
+
+      // 3. GUARDAR TRANSACCIÓN (Sin usar ON CONFLICT)
+      const txCheck = await client.query('SELECT 1 FROM transactions WHERE reference = $1', [reference]);
+      if (txCheck.rows.length === 0) {
+        await client.query(
+          'INSERT INTO transactions (email, reference, status, amount) VALUES ($1, $2, $3, $4)',
+          [email, reference, 'APPROVED', amount]
+        );
+      }
+
       await client.query('COMMIT');
       console.log('DB lista para: ' + email);
     } catch (dbError) {
@@ -51,6 +72,7 @@ router.post('/webhook', async (req, res) => {
       client.release();
     }
 
+    // Enviar correo con credenciales
     resend.emails.send({
       from: 'Academia SoluPro <hola@academia-solupro.com>',
       to: email,
