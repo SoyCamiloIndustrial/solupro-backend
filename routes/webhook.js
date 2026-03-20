@@ -10,7 +10,7 @@ router.post('/webhook', async (req, res) => {
   try {
     const { event, data } = req.body;
     if (event !== 'transaction.updated') return;
-    
+
     const transaction = data?.transaction;
     if (!transaction || transaction.status !== 'APPROVED') return;
 
@@ -20,32 +20,52 @@ router.post('/webhook', async (req, res) => {
     const courseId  = 2;
     if (!email) return;
 
-    const tempPassword = 'SoluPro-' + Math.random().toString(36).slice(-6);
-    const passwordHash = await bcrypt.hash(tempPassword, 10);
-    console.log('Procesando acceso para: ' + email);
+    // La contraseña temporal solo se usa si el usuario es nuevo o no tiene contraseña.
+    // Si ya tiene contraseña, se reutiliza null para no pisarla.
+    let tempPassword = null;
+    let passwordHash = null;
 
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      // 1. GUARDAR USUARIO (Sin usar ON CONFLICT)
-      const userCheck = await client.query('SELECT email, password_hash FROM users WHERE email = $1', [email]);
+      // 1. GUARDAR USUARIO
+      const userCheck = await client.query(
+        'SELECT email, password_hash FROM users WHERE email = $1',
+        [email]
+      );
+
       if (userCheck.rows.length === 0) {
-        // Si no existe, lo creamos
+        // Usuario nuevo: generar contraseña y crear registro
+        tempPassword = 'SoluPro-' + Math.random().toString(36).slice(-6);
+        passwordHash = await bcrypt.hash(tempPassword, 10);
         await client.query(
           'INSERT INTO users (email, password_hash) VALUES ($1, $2)',
           [email, passwordHash]
         );
+        console.log('Usuario nuevo creado: ' + email);
+
       } else if (!userCheck.rows[0].password_hash) {
-        // Si existe pero no tiene contraseña, se la actualizamos
+        // Usuario existente sin contraseña: asignarle una
+        tempPassword = 'SoluPro-' + Math.random().toString(36).slice(-6);
+        passwordHash = await bcrypt.hash(tempPassword, 10);
         await client.query(
-          'UPDATE users SET password_hash = $2 WHERE email = $1',
-          [email, passwordHash]
+          'UPDATE users SET password_hash = $1 WHERE email = $2',
+          [passwordHash, email]
         );
+        console.log('Contraseña asignada a usuario existente: ' + email);
+
+      } else {
+        // Usuario que ya tiene contraseña: no se toca.
+        // tempPassword queda null → el correo le avisará que ya tiene acceso.
+        console.log('Usuario recurrente, sin cambio de contraseña: ' + email);
       }
 
-      // 2. ASIGNAR CURSO (Sin usar ON CONFLICT)
-      const courseCheck = await client.query('SELECT 1 FROM user_courses WHERE email = $1 AND course_id = $2', [email, courseId]);
+      // 2. ASIGNAR CURSO
+      const courseCheck = await client.query(
+        'SELECT 1 FROM user_courses WHERE email = $1 AND course_id = $2',
+        [email, courseId]
+      );
       if (courseCheck.rows.length === 0) {
         await client.query(
           'INSERT INTO user_courses (email, course_id) VALUES ($1, $2)',
@@ -53,8 +73,11 @@ router.post('/webhook', async (req, res) => {
         );
       }
 
-      // 3. GUARDAR TRANSACCIÓN (Sin usar ON CONFLICT)
-      const txCheck = await client.query('SELECT 1 FROM transactions WHERE reference = $1', [reference]);
+      // 3. GUARDAR TRANSACCIÓN
+      const txCheck = await client.query(
+        'SELECT 1 FROM transactions WHERE reference = $1',
+        [reference]
+      );
       if (txCheck.rows.length === 0) {
         await client.query(
           'INSERT INTO transactions (email, reference, status, amount) VALUES ($1, $2, $3, $4)',
@@ -72,7 +95,13 @@ router.post('/webhook', async (req, res) => {
       client.release();
     }
 
-    // Enviar correo con credenciales
+    // Construir el cuerpo del correo según si tiene contraseña nueva o ya tenía
+    const passwordSection = tempPassword
+      ? `<p><strong>Contrasena:</strong> ${tempPassword}</p>
+         <p style="color:#6b7280;font-size:13px;">Puedes cambiarla desde tu perfil una vez que ingreses.</p>`
+      : `<p>Ya tienes una contraseña registrada. Usa la que creaste anteriormente.</p>
+         <p style="color:#6b7280;font-size:13px;">¿La olvidaste? Escríbenos a soporte@academia-solupro.com</p>`;
+
     resend.emails.send({
       from: 'Academia SoluPro <hola@academia-solupro.com>',
       to: email,
@@ -82,7 +111,7 @@ router.post('/webhook', async (req, res) => {
         <p>Tu pago fue procesado. Ya puedes ver tus clases.</p>
         <hr>
         <p><strong>Email:</strong> ${email}</p>
-        <p><strong>Contrasena:</strong> ${tempPassword}</p>
+        ${passwordSection}
         <br>
         <a href="https://academia-solupro.com/login"
            style="background:#10b981;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">
