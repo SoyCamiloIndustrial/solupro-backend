@@ -118,7 +118,11 @@ router.post('/webhook', async (req, res) => {
           Entrar al Panel
         </a>
       </div>`
-    }).catch(err => console.error('Error correo:', err.message));
+    }).then(result => {
+      console.log('Correo enviado:', JSON.stringify(result));
+    }).catch(err => {
+      console.error('Error correo DETALLE:', JSON.stringify(err));
+    });
 
   } catch (error) {
     console.error('Error webhook:', error.message);
