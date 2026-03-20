@@ -4,6 +4,9 @@ const jwt     = require('jsonwebtoken');
 const pool    = require('../db');
 const router  = express.Router();
 
+// ==========================================
+// 1. LOGIN MANUAL (Para usuarios recurrentes)
+// ==========================================
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -38,15 +41,55 @@ router.post('/login', async (req, res) => {
   }
 });
 
-router.post('/auto-login', (req, res) => {
-  if (!req.body.email)
-    return res.status(400).json({ error: 'Email requerido' });
-  const token = jwt.sign(
-    { email: req.body.email.toLowerCase().trim() },
-    process.env.JWT_SECRET || 'dev_secret',
-    { expiresIn: '7d' }
-  );
-  res.json({ success: true, token });
+
+// ==========================================
+// 2. AUTO-LOGIN (Fricción Cero post-compra)
+// ==========================================
+router.post('/auto-login', async (req, res) => {
+  try {
+    const { transaction_id, email } = req.body;
+
+    // 1. Si no hay ID de Wompi, no hay acceso.
+    if (!transaction_id) {
+      return res.status(400).json({ error: 'Transacción no válida' });
+    }
+
+    // 2. Le preguntamos a Wompi directamente por esta transacción
+    const wompiRes = await fetch(`https://production.wompi.co/v1/transactions/${transaction_id}`);
+    const wompiData = await wompiRes.json();
+
+    if (!wompiRes.ok || !wompiData.data) {
+      return res.status(400).json({ error: 'No se pudo verificar el pago en Wompi' });
+    }
+
+    const tx = wompiData.data;
+
+    // 3. Verificamos que el pago esté APROBADO
+    if (tx.status !== 'APPROVED') {
+      return res.status(400).json({ error: 'El pago no está aprobado aún' });
+    }
+
+    // 4. Tomamos el correo DIRECTAMENTE de Wompi (100% seguro)
+    const correoDefinitivo = (tx.customer_email || email || "").toLowerCase().trim();
+
+    if (!correoDefinitivo) {
+      return res.status(400).json({ error: 'No se pudo obtener el correo del comprador' });
+    }
+
+    // 5. Generamos el pase VIP
+    const token = jwt.sign(
+      { email: correoDefinitivo },
+      process.env.JWT_SECRET || 'dev_secret',
+      { expiresIn: '7d' }
+    );
+    
+    // Devolvemos el token y el email real usado en Wompi
+    res.json({ success: true, token, email: correoDefinitivo });
+
+  } catch (error) {
+    console.error('Error en auto-login seguro:', error.message);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
 });
 
 module.exports = router;
